@@ -293,6 +293,17 @@ export interface SurveillanceFeedMessage {
   calibration?: Record<string, { calibrated: boolean, confidence: number, consensus: [number, number] }>;
 
   // Individual vehicle data is now sent directly in VideoFrameMessage.vehicles
+
+  // Event/analysis blocks shipped by the inference worker (WS metrics)
+  vru?: { counts?: Record<string, number>; near_miss_frame?: number; near_miss_total?: number };
+  tailgating?: { pairs?: number; tailgating_frame?: number; tailgating_total?: number; events?: unknown[] };
+  behavior_events?: {
+    speeding_frame?: number; speeding_total?: number;
+    parked_now?: number; parking_total?: number;
+    lane_changes_frame?: number; lane_changes_total?: number;
+    lane_changes_by_lane?: Record<string, number>;
+  };
+  collision?: { pairs?: number; overlaps?: number; collisions_frame?: number; collisions_total?: number };
 }
 
 export interface VideoFrameMessage {

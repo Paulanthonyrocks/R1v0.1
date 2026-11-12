@@ -915,6 +915,72 @@ vru_analysis:
   near_miss_dist_threshold_px: 60.0
   # Per-feed cooldown (seconds) between emitted vru_near_miss anomalies.
   feed_cooldown_seconds: 30.0
+# Vehicle-vehicle tailgating: same-lane pairs where the follower is closing on
+# the leader with TTC below the threshold. Pure pixel-space kinematics per
+# frame (app/services/tailgating.py), emitted as a "tailgating" anomaly at
+# most once per feed per cooldown window; analytics_service maps it to a
+# TAILGATING incident.
+tailgating:
+  enabled: true
+  ttc_threshold_sec: 1.5
+  min_closing_px_s: 0.5
+  # Cap on events kept per frame (worst-TTC first); keeps the metrics blob small.
+  max_events: 5
+  # Per-feed cooldown (seconds) between emitted tailgating anomalies.
+  feed_cooldown_seconds: 30.0
+# Behavior events on tracked vehicles (app/services/behavior_events.py):
+# per-vehicle speeding vs speed_limit, illegal-parking candidates (stationary
+# in a committed lane beyond parking_min_stationary_sec), and lane-change
+# counts (metrics only -- normal lane changes are not incidents). Speeding and
+# parking anomalies are emitted at most once per feed per cooldown window;
+# analytics_service maps them to SPEEDING / ILLEGAL_PARKING incidents.
+behavior_events:
+  enabled: true
+  speeding_margin_kmh: 5.0
+  speeding_cooldown_seconds: 60.0
+  parking_min_stationary_sec: 300.0
+  parking_cooldown_seconds: 300.0
+  lane_change_min_seen_frames: 10
+  # Cap on events kept per frame (worst first); keeps the metrics blob small.
+  max_events: 5
+# Collision detection: overlapping vehicle tracks with a hard-brake or
+# stopped signature (app/services/collision.py). Emitted as a "collision"
+# anomaly (severity Critical) at most once per feed per cooldown window;
+# analytics_service maps it to an ACCIDENT incident.
+collision_detection:
+  enabled: true
+  iou_threshold: 0.35
+  brake_accel_mps2: -2.0
+  stopped_speed_kmh: 5.0
+  feed_cooldown_seconds: 120.0
+  max_events: 3
+# Temporal detection fusion (#6a): average/vote overlapping detections across
+# the last window_frames before tracking; high-confidence detections pass
+# through untouched. Pure post-filter on detector output (temporal_fusion.py).
+temporal_fusion:
+  enabled: true
+  iou_threshold: 0.5
+  window_frames: 3
+  min_support: 2
+  high_conf_pass_through: 0.6
+# Multi-scale detection (#6c): re-scan expanded crops around small/uncertain
+# full-frame detections at native resolution (multiscale.py). DEFAULT OFF —
+# extra detector passes cost throughput; enable after measuring on a live run.
+multi_scale:
+  enabled: false
+  max_crops_per_frame: 4
+  min_conf: 0.3
+  max_area_frac: 0.05
+  expand_frac: 0.25
+  min_side_px: 24
+  merge_iou_threshold: 0.5
+# Camera-motion compensation (#6b): sparse optical flow estimates global frame
+# motion; track velocities are corrected by it so pole-shake doesn't inflate
+# speeds (motion_comp.py). cv2 imported lazily; no-op when unavailable.
+camera_motion:
+  compensation_enabled: true
+  min_motion_px_per_frame: 0.5
+  max_feature_points: 200
 speed_limit: 60
 stopped_speed_threshold_kmh: 5
 storage:

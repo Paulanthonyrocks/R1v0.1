@@ -18,6 +18,18 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, isLive, className 
     const avgSpeed = metrics.session_average_speed_kmh || metrics.average_speed_kmh || 0;
     const vehicleCount = metrics.total_vehicles_cumulative || metrics.total_vehicles || 0;
 
+    const be = metrics.behavior_events;
+    const tg = metrics.tailgating;
+    const vr = metrics.vru;
+    const col = metrics.collision;
+    const eventStats: { label: string; value: number }[] = [];
+    if (be?.speeding_total) eventStats.push({ label: "Speeding", value: be.speeding_total });
+    if (be && (be.parked_now || be.parking_total)) eventStats.push({ label: "Parked", value: be.parked_now || 0 });
+    if (be?.lane_changes_total) eventStats.push({ label: "Lane chg", value: be.lane_changes_total });
+    if (tg?.tailgating_total) eventStats.push({ label: "Tailgating", value: tg.tailgating_total });
+    if (vr?.near_miss_total) eventStats.push({ label: "VRU near", value: vr.near_miss_total });
+    if (col?.collisions_total) eventStats.push({ label: "Collision", value: col.collisions_total });
+
     return (
         <div className={cn(
             "relative p-3 bg-industrial-panel backdrop-blur-md border border-lcd-text/30 font-lcd text-lcd-text space-y-3 shadow-[inset_0_0_20px_rgba(0,0,0,0.5)]",
@@ -92,6 +104,18 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, isLive, className 
                     />
                 </div>
             </div>
+
+            {/* Behavior / safety events (worker-computed, WS metrics blocks) */}
+            {eventStats.length > 0 && (
+                <div className="grid grid-cols-3 gap-2 border-t border-lcd-text/20 pt-2">
+                    {eventStats.slice(0, 6).map((e) => (
+                        <div key={e.label} className="flex flex-col">
+                            <span className="text-[7px] font-bold uppercase opacity-50 tracking-tighter">{e.label}</span>
+                            <span className="text-sm font-black tabular-nums tracking-tighter text-lcd-text">{e.value}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
 
             {/* System Note */}
             <div className="text-[7px] opacity-30 uppercase tracking-[0.3em] text-center pt-1 italic">

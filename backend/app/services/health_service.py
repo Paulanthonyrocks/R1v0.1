@@ -74,15 +74,26 @@ class SystemHealthService:
         # Feed Manager stats
         feeds_info = []
         active_feeds = 0
+        from app.utils.health_score import feed_health_score
         async with self.fm._lock:
             for fid, entry in self.fm.process_registry.items():
                 is_running = entry["status"].value == "running"
                 if is_running: active_feeds += 1
+                _fps = entry.get("timer").get_fps("loop_total") if entry.get("timer") else 0
                 feeds_info.append({
                     "feed_id": fid,
                     "status": entry["status"].value,
                     "uptime": time.time() - entry.get("start_time", time.time()) if entry.get("start_time") else 0,
-                    "fps": entry.get("timer").get_fps("loop_total") if entry.get("timer") else 0
+                    "fps": _fps,
+                    # Composite per-feed health (item 4): fuses status, fps,
+                    # worker drops / SHM pressure, calibration and camera
+                    # image quality into one 0-100 score + grade.
+                    "health": feed_health_score(
+                        status=entry["status"].value,
+                        fps=_fps,
+                        latest_metrics=entry.get("latest_metrics"),
+                        camera_health=entry.get("camera_health"),
+                    ),
                 })
 
         # Redis status check. AUDIT FIX (2026-08-24): get_redis_client() can block

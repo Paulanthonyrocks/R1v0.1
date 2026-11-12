@@ -28,6 +28,24 @@ except Exception:
     _VRU_CLASS_IDS = {0: "person", 1: "bicycle"}
     vru_event = is_vru = vru_frame_stats = None
 
+# Tailgating (same-lane TTC) predicates, same guarded-import pattern.
+try:
+    from app.services.tailgating import frame_stats as tg_frame_stats
+except Exception:
+    tg_frame_stats = None
+
+# Behavior events (speeding / illegal parking / lane changes), same pattern.
+try:
+    from app.services.behavior_events import frame_stats as be_frame_stats
+except Exception:
+    be_frame_stats = None
+
+# Collision detection (overlapping tracks + brake/stopped signature).
+try:
+    from app.services.collision import frame_stats as col_frame_stats
+except Exception:
+    col_frame_stats = None
+
 logger = logging.getLogger("Inference")
 
 # Warn-once guards: the lane-detection deprecation warnings used to fire on
@@ -258,6 +276,16 @@ _TRACK_CENTERS_BY_FEED: Dict[str, Dict[str, tuple]] = {}
 # time (per-feed cooldown, see vru_analysis.feed_cooldown_seconds).
 _VRU_NM_TOTAL_BY_FEED: Dict[str, int] = {}
 _VRU_NM_LAST_FIRE_BY_FEED: Dict[str, float] = {}
+_TG_TOTAL_BY_FEED: Dict[str, int] = {}
+_TG_LAST_FIRE_BY_FEED: Dict[str, float] = {}
+# Behavior events: per-feed analysis state + emission throttle.
+# state {feed: {tid: {"lane": last committed lane, "seen": n}}} is mutated in
+# place by behavior_events.frame_stats over the tracker's persistent dicts.
+_BE_STATE_BY_FEED: Dict[str, Dict[str, Any]] = {}
+_BE_TOTAL_BY_FEED: Dict[str, Dict[str, int]] = {}
+_BE_LAST_BY_FEED: Dict[str, Dict[str, float]] = {}
+_COL_TOTAL_BY_FEED: Dict[str, int] = {}
+_COL_LAST_FIRE_BY_FEED: Dict[str, float] = {}
 
 
 def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int) -> None:
@@ -553,6 +581,12 @@ def inference_worker(
     vru_class_ids = {c for c in vehicle_class_ids if c in _VRU_CLASS_IDS}
     vru_cfg = config.get("vru_analysis", {}) or {}
     vru_enabled = bool(vru_cfg.get("enabled", True)) and vru_frame_stats is not None and bool(vru_class_ids)
+    tg_cfg = config.get("tailgating", {}) or {}
+    tg_enabled = bool(tg_cfg.get("enabled", True)) and tg_frame_stats is not None
+    be_cfg = config.get("behavior_events", {}) or {}
+    be_enabled = bool(be_cfg.get("enabled", True)) and be_frame_stats is not None
+    col_cfg = config.get("collision_detection", {}) or {}
+    col_enabled = bool(col_cfg.get("enabled", True)) and col_frame_stats is not None
     display_conf_floor = float(vehicle_det_cfg.get("confidence_threshold", 0.25))
     low_conf_floor = float(vehicle_det_cfg.get("low_confidence_threshold", 0.1))
     batch_conf_floor = min(display_conf_floor, low_conf_floor)
@@ -1539,6 +1573,9 @@ def inference_worker(
                         # as a vru_near_miss anomaly at most once per feed per
                         # cooldown window so the incident path cannot storm.
                         vru_frame = None
+                        tg_frame = None
+                        be_frame = None
+                        col_frame = None
                         if vru_enabled and meta["should_detect"] and not batch_inference_failed:
                             _vru_dets = batch_vru_map.get(i, [])
                             if _vru_dets:
@@ -1567,6 +1604,128 @@ def inference_worker(
                                             "location": None,
                                         })
 
+                        # Tailgating: same-lane follower closing on a leader with
+                        # TTC below threshold. Emitted as a "tailgating" anomaly
+                        # at most once per feed per cooldown window (same storm
+                        # guard as VRU). analytics_service maps it to a
+                        # TAILGATING incident.
+                        if tg_enabled and meta["should_detect"] and not batch_inference_failed:
+                            tg_frame = tg_frame_stats(
+                                vis_tracks,
+                                ttc_thresh=float(tg_cfg.get("ttc_threshold_sec", 1.5)),
+                                min_closing_px_s=float(tg_cfg.get("min_closing_px_s", 0.5)),
+                                max_events=int(tg_cfg.get("max_events", 5)),
+                            )
+                            _fkey = meta["feed_id"]
+                            if tg_frame["tailgating"]:
+                                _TG_TOTAL_BY_FEED[_fkey] = _TG_TOTAL_BY_FEED.get(_fkey, 0) + tg_frame["tailgating"]
+                                _now = time.time()
+                                if _now - _TG_LAST_FIRE_BY_FEED.get(_fkey, 0.0) >= float(tg_cfg.get("feed_cooldown_seconds", 30.0)):
+                                    _TG_LAST_FIRE_BY_FEED[_fkey] = _now
+                                    _ev0 = tg_frame["events"][0] if tg_frame["events"] else {}
+                                    monitor.anomalies.append({
+                                        "type": "tailgating",
+                                        "vehicle_id": _ev0.get("follower_id"),
+                                        "timestamp": _now,
+                                        "severity": "Warning",
+                                        "details": (
+                                            f"Tailgating: follower {_ev0.get('follower_id')} on leader "
+                                            f"{_ev0.get('leader_id')} lane {_ev0.get('lane')} "
+                                            f"ttc={_ev0.get('ttc_sec')}s gap={_ev0.get('gap_px')}px"
+                                        ),
+                                        "location": None,
+                                    })
+
+                        # Behavior events: per-vehicle speeding vs speed_limit,
+                        # illegal-parking candidates (stationary in a committed
+                        # lane), lane-change counts. Speeding/parking emitted as
+                        # anomalies at most once per feed per cooldown window
+                        # (same storm guard as tailgating); lane changes are
+                        # metrics-only. analytics_service maps the anomalies to
+                        # SPEEDING / ILLEGAL_PARKING incidents.
+                        if be_enabled and meta["should_detect"] and not batch_inference_failed:
+                            _fkey = meta["feed_id"]
+                            be_frame = be_frame_stats(
+                                vis_tracks, time.time(),
+                                _BE_STATE_BY_FEED.setdefault(_fkey, {}),
+                                limit_kmh=float(config.get("speed_limit", 60.0)),
+                                margin_kmh=float(be_cfg.get("speeding_margin_kmh", 5.0)),
+                                min_stationary_sec=float(be_cfg.get("parking_min_stationary_sec", 300.0)),
+                                stopped_speed_kmh=float(config.get("stopped_speed_threshold_kmh", 5.0)),
+                                lane_change_min_seen=int(be_cfg.get("lane_change_min_seen_frames", 10)),
+                                max_events=int(be_cfg.get("max_events", 5)),
+                            )
+                            _tot = _BE_TOTAL_BY_FEED.setdefault(_fkey, {"speeding": 0, "parking": 0, "lane_changes": 0})
+                            _last = _BE_LAST_BY_FEED.setdefault(_fkey, {})
+                            _now = time.time()
+                            if be_frame["n_speeding"]:
+                                _tot["speeding"] += be_frame["n_speeding"]
+                                if _now - _last.get("speeding", 0.0) >= float(be_cfg.get("speeding_cooldown_seconds", 60.0)):
+                                    _last["speeding"] = _now
+                                    _e = be_frame["speeding"][0]
+                                    monitor.anomalies.append({
+                                        "type": "speeding",
+                                        "vehicle_id": _e.get("vehicle_id"),
+                                        "timestamp": _now,
+                                        "severity": "Warning",
+                                        "details": (
+                                            f"Speeding: vehicle {_e.get('vehicle_id')} at "
+                                            f"{_e.get('speed_kmh')} km/h (limit {_e.get('limit_kmh')}) "
+                                            f"lane {_e.get('lane')}"
+                                        ),
+                                        "location": None,
+                                    })
+                            if be_frame["n_parking"]:
+                                _tot["parking"] += be_frame["n_parking"]
+                                if _now - _last.get("parking", 0.0) >= float(be_cfg.get("parking_cooldown_seconds", 300.0)):
+                                    _last["parking"] = _now
+                                    _e = be_frame["parking"][0]
+                                    monitor.anomalies.append({
+                                        "type": "illegal_parking",
+                                        "vehicle_id": _e.get("vehicle_id"),
+                                        "timestamp": _now,
+                                        "severity": "Warning",
+                                        "details": (
+                                            f"Illegal parking: vehicle {_e.get('vehicle_id')} stationary "
+                                            f"{_e.get('parked_sec')}s in lane {_e.get('lane')}"
+                                        ),
+                                        "location": None,
+                                    })
+                            if be_frame["n_lane_changes"]:
+                                _tot["lane_changes"] += be_frame["n_lane_changes"]
+
+                        # Collision detection: overlapping vehicle tracks with a
+                        # hard-brake or stopped signature. Emitted as a
+                        # "collision" anomaly (severity Critical) at most once
+                        # per feed per cooldown window; analytics_service maps
+                        # it to an ACCIDENT incident.
+                        if col_enabled and meta["should_detect"] and not batch_inference_failed:
+                            col_frame = col_frame_stats(
+                                vis_tracks,
+                                iou_thresh=float(col_cfg.get("iou_threshold", 0.35)),
+                                brake_accel_mps2=float(col_cfg.get("brake_accel_mps2", -2.0)),
+                                stopped_speed_kmh=float(config.get("stopped_speed_threshold_kmh", 5.0)),
+                                max_events=int(col_cfg.get("max_events", 3)),
+                            )
+                            _fkey = meta["feed_id"]
+                            if col_frame["n"]:
+                                _COL_TOTAL_BY_FEED[_fkey] = _COL_TOTAL_BY_FEED.get(_fkey, 0) + col_frame["n"]
+                                _now = time.time()
+                                if _now - _COL_LAST_FIRE_BY_FEED.get(_fkey, 0.0) >= float(col_cfg.get("feed_cooldown_seconds", 120.0)):
+                                    _COL_LAST_FIRE_BY_FEED[_fkey] = _now
+                                    _e = col_frame["collisions"][0]
+                                    monitor.anomalies.append({
+                                        "type": "collision",
+                                        "vehicle_id": _e["vehicles"][0] if _e["vehicles"] else None,
+                                        "timestamp": _now,
+                                        "severity": "Critical",
+                                        "details": (
+                                            f"Collision: vehicles {_e['vehicles']} overlapping "
+                                            f"iou={_e['iou']} lane {_e['lane']} ({_e['kind']})"
+                                        ),
+                                        "location": None,
+                                    })
+
                         # Merge operational metrics with traffic analytics
                         _stage_totals["reid"] += time.perf_counter() - _t_reid
                         _t_fwd = time.perf_counter()
@@ -1578,6 +1737,40 @@ def inference_worker(
                                 "counts": vru_frame["counts"] if vru_frame else {},
                                 "near_miss_frame": vru_frame["near_miss"] if vru_frame else 0,
                                 "near_miss_total": _VRU_NM_TOTAL_BY_FEED.get(_fkey, 0),
+                            }
+                        if tg_enabled:
+                            _fkey = meta["feed_id"]
+                            combined_metrics["tailgating"] = {
+                                "pairs": tg_frame["pairs"] if tg_frame else 0,
+                                "tailgating_frame": tg_frame["tailgating"] if tg_frame else 0,
+                                "tailgating_total": _TG_TOTAL_BY_FEED.get(_fkey, 0),
+                                "events": tg_frame["events"] if tg_frame else [],
+                            }
+                        if be_enabled:
+                            _fkey = meta["feed_id"]
+                            _tot = _BE_TOTAL_BY_FEED.get(_fkey, {})
+                            combined_metrics["behavior_events"] = {
+                                "speeding_frame": be_frame["n_speeding"] if be_frame else 0,
+                                "speeding_total": _tot.get("speeding", 0),
+                                "parked_now": be_frame["parked_now"] if be_frame else 0,
+                                "parking_total": _tot.get("parking", 0),
+                                "lane_changes_frame": be_frame["n_lane_changes"] if be_frame else 0,
+                                "lane_changes_total": _tot.get("lane_changes", 0),
+                                "lane_changes_by_lane": be_frame["lane_changes_by_lane"] if be_frame else {},
+                                "events": {
+                                    "speeding": be_frame["speeding"] if be_frame else [],
+                                    "parking": be_frame["parking"] if be_frame else [],
+                                    "lane_changes": be_frame["lane_changes"] if be_frame else [],
+                                },
+                            }
+                        if col_enabled:
+                            _fkey = meta["feed_id"]
+                            combined_metrics["collision"] = {
+                                "pairs": col_frame["pairs"] if col_frame else 0,
+                                "overlaps": col_frame["overlaps"] if col_frame else 0,
+                                "collisions_frame": col_frame["n"] if col_frame else 0,
+                                "collisions_total": _COL_TOTAL_BY_FEED.get(_fkey, 0),
+                                "events": col_frame["collisions"] if col_frame else [],
                             }
 
                         metrics_obj.mark_frame()  # increments frames_processed AND records rolling fps

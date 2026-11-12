@@ -258,10 +258,16 @@ class AnalyticsService:
                     continue
                 rate_limit[rl_key] = now
                 sev = severity_map.get(anomaly.get("severity"), IncidentSeverityEnum.MEDIUM)
+                anomaly_type_map = {
+                    "tailgating": IncidentTypeEnum.TAILGATING,
+                    "speeding": IncidentTypeEnum.SPEEDING,
+                    "illegal_parking": IncidentTypeEnum.ILLEGAL_PARKING,
+                    "collision": IncidentTypeEnum.ACCIDENT,
+                }
                 try:
                     await self._incident_manager.create_incident(
                         location={"latitude": latitude, "longitude": longitude},
-                        incident_type=IncidentTypeEnum.OTHER,
+                        incident_type=anomaly_type_map.get(anomaly.get("type"), IncidentTypeEnum.OTHER),
                         severity=sev,
                         description=f"Automated Alert: {anomaly.get('details')}",
                         source_feed_id=feed_id,

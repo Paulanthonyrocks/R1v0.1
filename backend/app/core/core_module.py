@@ -19,6 +19,18 @@ from .tracking import TrackingManager
 from .transforms import CoordinateTransformer
 from ..utils.polygons import pixel_polygon
 
+# Perception-quality helpers (#6): temporal fusion, camera-motion compensation,
+# multi-scale crops. Pure modules; guarded like the imports above.
+try:
+    from ..services.temporal_fusion import fuse_detections
+    from ..services.motion_comp import GlobalMotionEstimator, adjust_velocity
+    from ..services.multiscale import select_crop_regions, offset_box, merge_detections
+except Exception:
+    fuse_detections = None
+    GlobalMotionEstimator = None
+    adjust_velocity = None
+    select_crop_regions = offset_box = merge_detections = None
+
 # Utility imports
 try:
     from ..utils.image_processing import LicensePlatePreprocessor
@@ -270,6 +282,22 @@ class CoreModule:
         self.min_speed_for_accel_kmh = float(b_cfg.get("min_speed_for_accel_kmh", 15.0))
         self.min_accel_dt_seconds = float(b_cfg.get("min_accel_dt_seconds", 0.15))
         self.min_physical_accel_mps2 = float(b_cfg.get("min_physical_accel_mps2", -15.0))
+
+        # Perception-quality state (#6): temporal fusion history, multi-scale
+        # gate, camera-motion estimator (lazy cv2; None when unavailable).
+        self._tf_cfg = config.get("temporal_fusion", {}) or {}
+        self._tf_history: List[list] = []
+        self._ms_cfg = config.get("multi_scale", {}) or {}
+        self._cm_cfg = config.get("camera_motion", {}) or {}
+        self._motion_est = None
+        if self._cm_cfg.get("compensation_enabled", True) and GlobalMotionEstimator is not None:
+            try:
+                self._motion_est = GlobalMotionEstimator(
+                    max_points=int(self._cm_cfg.get("max_feature_points", 200)),
+                    min_motion_px=float(self._cm_cfg.get("min_motion_px_per_frame", 0.5)),
+                )
+            except Exception:
+                self._motion_est = None
 
         # Session Metrics
         # 300 frames is NOT 5 minutes: the deque holds the most recent 300
@@ -697,6 +725,48 @@ class CoreModule:
                                        .get("low_confidence_threshold", thresh)))
             detections = self.detector.detect(frame, thresh)
 
+        # Temporal fusion (#6a): vote/average overlapping detections across the
+        # last window_frames before association; high-confidence detections
+        # pass through untouched, unsupported low-confidence ones drop.
+        if fuse_detections is not None and self._tf_cfg.get("enabled", True):
+            detections, self._tf_history, _tf_stats = fuse_detections(
+                detections, self._tf_history,
+                iou_thresh=float(self._tf_cfg.get("iou_threshold", 0.5)),
+                window=int(self._tf_cfg.get("window_frames", 3)),
+                min_support=int(self._tf_cfg.get("min_support", 2)),
+                high_conf=float(self._tf_cfg.get("high_conf_pass_through", 0.6)),
+            )
+            if _tf_stats["dropped"]:
+                logger.debug(f"[{self.feed_id}] temporal-fusion kept {_tf_stats['kept']}/{_tf_stats['in']} (dropped {_tf_stats['dropped']} unsupported)")
+
+        # Multi-scale (#6c): re-scan expanded crops around small/uncertain
+        # detections at native resolution, then NMS-merge. DEFAULT OFF — extra
+        # detector passes cost throughput; enable per-feed after a live run.
+        if (select_crop_regions is not None and offset_box is not None
+                and merge_detections is not None
+                and self._ms_cfg.get("enabled", False) and detections):
+            # Bind to locals: pyright does not carry module-level None-narrowing
+            # into the generator expression below.
+            _sel, _off, _merge = select_crop_regions, offset_box, merge_detections
+            _fh, _fw = frame.shape[:2]
+            _crops = _sel(
+                detections, _fw, _fh,
+                max_crops=int(self._ms_cfg.get("max_crops_per_frame", 4)),
+                min_conf=float(self._ms_cfg.get("min_conf", 0.3)),
+                max_area_frac=float(self._ms_cfg.get("max_area_frac", 0.05)),
+                expand_frac=float(self._ms_cfg.get("expand_frac", 0.25)),
+                min_side_px=int(self._ms_cfg.get("min_side_px", 24)),
+            )
+            _extra = []
+            for _crop in _crops:
+                try:
+                    _sub = self.detector.detect(frame[_crop[1]:_crop[3], _crop[0]:_crop[2]], self.confidence_threshold)
+                    _extra.extend((_off(_d[0], _crop), _d[1], _d[2], None) for _d in _sub)
+                except Exception as _e:
+                    logger.warning(f"[{self.feed_id}] multi-scale crop {_crop} failed: {_e}")
+            if _extra:
+                detections = _merge(detections, _extra, iou_thresh=float(self._ms_cfg.get("merge_iou_threshold", 0.5)))
+
         # 3. Compute detection embeddings BEFORE association so the tracker's
         # appearance-weighted matching (ReID) actually contributes. Previously
         # embeddings were only computed after update(), leaving det embeddings
@@ -749,6 +819,21 @@ class CoreModule:
         _sub["reid_assoc"] += _t_tracker - _t_reid_assoc
         vehicle_data = self.tracker.update(dets_for_tracker, current_time, frame.shape).copy()
         _sub["tracker_update"] += time.perf_counter() - _t_tracker
+
+        # Camera-motion compensation (#6b): subtract the estimated global
+        # frame motion from every track's velocity (vehicle_data is a SHALLOW
+        # copy — the track dicts are the tracker's own, so this persists).
+        if self._motion_est is not None and adjust_velocity is not None:
+            _motion = self._motion_est.update(frame)
+            if _motion is not None:
+                for _tr in vehicle_data.values():
+                    if not isinstance(_tr, dict):
+                        continue
+                    _tr["vx"], _tr["vy"] = adjust_velocity(
+                        float(_tr.get("vx") or 0.0), float(_tr.get("vy") or 0.0),
+                        _motion, self.fps,
+                        min_motion_px=float(self._cm_cfg.get("min_motion_px_per_frame", 0.5)),
+                    )
         _t_finalize = time.perf_counter()
 
         # Enforce the configured active-track cap (the key was read at init

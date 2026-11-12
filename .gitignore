@@ -72,7 +72,6 @@ evidence_key
 
 # Keep scratch audit artifacts local, but include maintained regressions.
 backend/tests/*
-!backend/tests/test_pipeline_followup.py
 # Phase 1 evidence-integrity regressions: sealing must fail closed on a
 # tampered artefact, an edited manifest, a forged signature, and a missing key.
 !backend/tests/test_evidence_integrity.py
@@ -91,6 +90,8 @@ backend/tests/*
 # Oct-20: incident acknowledge/resolve must attribute to the authenticated
 # admin, not the literal "operator" audit default.
 !backend/tests/test_incident_attribution.py
+# Tailgating / behavior-events tests: ignored per user request (fall under
+# backend/tests/* above); kept locally, not committed.
 backend/app/tests/
 hosting/__tests__/
 # One-off manual probe scripts (verified: empty / hello-world debug scratch)

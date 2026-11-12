@@ -37,6 +37,7 @@ interface HealthStats {
         active_feeds: number;
         total_feeds: number;
         websocket_clients: number;
+        feeds?: { feed_id: string; status: string; fps: number; health?: { score: number; grade: string; factors?: Record<string, unknown> } }[];
     };
     timestamp: string;
 }
@@ -176,6 +177,28 @@ export const SystemHealthMonitor: React.FC = () => {
                             <span className="text-xl font-bold font-lcd tabular-nums tracking-tighter">{stats.system.disk_percent}%</span>
                         </div>
                     </div>
+
+                    {/* Per-feed composite health (backend health_score: status+fps+drops+SHM+calibration+camera) */}
+                    {stats.application.feeds && stats.application.feeds.length > 0 && (
+                        <div className="border-t-2 border-lcd-text/10 pt-4 space-y-2">
+                            <span className="text-[9px] font-black uppercase opacity-60">Feed Health</span>
+                            <div className="flex flex-wrap gap-1.5">
+                                {stats.application.feeds.slice(0, 8).map((f) => {
+                                    const score = f.health?.score;
+                                    const color = score === undefined ? "text-lcd-text/60"
+                                        : score >= 80 ? "text-lcd-green"
+                                        : score >= 50 ? "text-yellow-500" : "text-red-500";
+                                    return (
+                                        <span key={f.feed_id}
+                                            className={cn("text-[8px] font-black uppercase tracking-tighter px-1.5 py-0.5 border border-lcd-text/20 bg-lcd-text/5", color)}
+                                            title={f.health ? `${f.health.grade} — ${JSON.stringify(f.health.factors)}` : f.status}>
+                                            {f.feed_id}{score !== undefined ? ` ${score}` : ""}
+                                        </span>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
 
                     {/* WS Grid Telemetry — REST /api/v1/websocket/health, 15s poll */}
                     <div className="border-t-2 border-lcd-text/10 pt-4 space-y-3">

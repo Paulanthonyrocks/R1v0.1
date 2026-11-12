@@ -22,6 +22,9 @@ _PLANNING_EXTRA_KEYS = (
     "queue_lengths",
     "high_density_lanes",
     "vru",
+    "tailgating",
+    "behavior_events",
+    "collision",
 )
 
 

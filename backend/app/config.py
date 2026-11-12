@@ -154,6 +154,12 @@ class AppConfig(BaseSettings):
     video_processing: Dict[str, Any] = {}
     vis_options_default: List[str] = []
     vru_analysis: Dict[str, Any] = {}
+    tailgating: Dict[str, Any] = {}
+    behavior_events: Dict[str, Any] = {}
+    collision_detection: Dict[str, Any] = {}
+    temporal_fusion: Dict[str, Any] = {}
+    multi_scale: Dict[str, Any] = {}
+    camera_motion: Dict[str, Any] = {}
     weather_service: Dict[str, Any] = {}
     
     model_config = SettingsConfigDict(
