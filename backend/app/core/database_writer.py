@@ -29,8 +29,9 @@ def database_writer_process(
 ):
     """Process dedicated to writing data to the database.
 
-    Handles vehicle_data (primary), safety_alert, and identified_vehicle
-    message types. Validates all items, re-enqueues on transient failures,
+    Handles vehicle_data (primary), safety_alert, identified_vehicle,
+    feed_metrics, and reid_identity message types. Validates all items,
+    re-enqueues on transient failures,
     drains the queue on shutdown, and includes a circuit-breaker for
     persistent DB outages.
     """
@@ -230,6 +231,19 @@ def database_writer_process(
                     if malformed_metrics:
                         logger.warning(f"Discarded {malformed_metrics} malformed feed_metrics in this batch.")
 
+                reid_batch = [it for it in valid_items if it["type"] == "reid_identity"]
+                if reid_batch:
+                    saved_reid = 0
+                    for it in reid_batch:
+                        try:
+                            db_manager.save_reid_identity(**it["data"])
+                            saved_reid += 1
+                        except Exception as e:
+                            logger.error(f"Failed to save ReID identity {it.get('data', {}).get('global_id')}: {e}")
+                            failed_items.append(it)
+                    if saved_reid:
+                        logger.debug(f"Saved {saved_reid} ReID identities to DB.")
+
                 if failed_items:
                     dropped_count = len(failed_items) - _MAX_REENQUEUE
                     if dropped_count > 0:
@@ -294,6 +308,8 @@ def database_writer_process(
                         elif msg_type == "feed_metrics":
                             if "data" in item:
                                 db_manager.save_feed_metrics_batch([item["data"]])
+                        elif msg_type == "reid_identity":
+                            db_manager.save_reid_identity(**item["data"])
                         drained += 1
                     except Exception as e:
                         logger.critical(f"Critical data loss during drain for {msg_type}: {e}. Item: {item!r}")

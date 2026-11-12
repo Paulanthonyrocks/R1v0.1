@@ -4,6 +4,7 @@ import asyncio
 import sqlite3
 import threading
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,7 +51,26 @@ def _parse_json_extra(raw: Any) -> Optional[Dict[str, Any]]:
             return parsed if isinstance(parsed, dict) else None
         except (ValueError, TypeError):
             return None
-    return None
+
+
+# sqlite3.DatabaseError messages meaning the FILE itself is corrupt (as opposed
+# to e.g. "no such table"). Mid-run corruption self-heals on these.
+_CORRUPT_HINTS = ("not a database", "malformed", "disk image is corrupt")
+
+
+def _is_corruption_error(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.DatabaseError) and any(
+        h in str(exc).lower() for h in _CORRUPT_HINTS
+    )
+
+
+# Cross-process schema-DDL lock (Redis SET NX). Every DatabaseManager process
+# (main, DB writer, each inference worker, the prune thread) used to run
+# CREATE TABLE / ALTER concurrently on the same file -- that race corrupted
+# vehicle.db ~30s into the Nov-12 Kaggle run. The first constructor to grab
+# the lock owns all DDL; the rest skip it.
+_SCHEMA_LOCK_KEY = "r1:sqlite_schema_init_lock"
+_SCHEMA_LOCK_TTL = 120
 
 # Register SQLite adapters for numpy types to prevent them from being stored as blobs
 def _register_sqlite_adapters():
@@ -349,17 +369,66 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error creating TimescaleDB hypertables: {e}")
 
+    @staticmethod
+    def _raise_if_db_file_corrupt(path: Path):
+        """Cheap file-level corruption check: a valid SQLite db always starts
+        with the 16-byte magic header. Catches a garbage main file even when a
+        hot -wal would otherwise mask it at the SQL level (WAL replay can
+        present a valid view while the main file is scribbled on)."""
+        try:
+            if path.stat().st_size < 100:
+                return  # 0-byte / not-yet-created file is a valid empty db
+            with open(path, "rb") as f:
+                magic = f.read(16)
+        except OSError:
+            return
+        if magic != b"SQLite format 3\x00":
+            raise sqlite3.DatabaseError("file is not a database")
+
     def _get_sqlite_connection(self) -> sqlite3.Connection:
         if not self.sqlite_db_path:
             raise DatabaseError("SQLite database path not configured.")
+        path = Path(self.sqlite_db_path)
         try:
             conn = sqlite3.connect(str(self.sqlite_db_path), timeout=10.0)
             conn.row_factory = sqlite3.Row
             try:
+                conn.execute("PRAGMA busy_timeout=10000;")
                 conn.execute("PRAGMA journal_mode=WAL;")
                 conn.execute("PRAGMA synchronous=NORMAL;")
             except sqlite3.Error as e:
-                logger.warning(f"Could not set WAL mode on {self.sqlite_db_path}: {e}")
+                if not getattr(self, "_wal_warned", False):
+                    logger.warning(
+                        f"Could not set WAL mode on {self.sqlite_db_path}: {e} "
+                        "(journal-mode fallback; concurrent-write corruption risk elevated)"
+                    )
+                    self._wal_warned = True
+            # Liveness probe: raises immediately on a corrupt file, so mid-run
+            # corruption self-heals on the next connection instead of failing
+            # every write for the rest of the run (Nov-12 Kaggle behavior:
+            # 949 ERROR / 122 CRITICAL from one corrupt vehicle.db).
+            try:
+                self._raise_if_db_file_corrupt(path)
+                conn.execute("SELECT name FROM sqlite_master LIMIT 1;").fetchone()
+            except sqlite3.DatabaseError as e:
+                if _is_corruption_error(e):
+                    conn.close()
+                    logger.error(
+                        f"SQLite DB {self.sqlite_db_path} failed liveness probe ({e}); "
+                        "quarantining and recreating a fresh database."
+                    )
+                    if self._recover_corrupt_db():
+                        conn = sqlite3.connect(str(self.sqlite_db_path), timeout=10.0)
+                        conn.row_factory = sqlite3.Row
+                        try:
+                            conn.execute("PRAGMA journal_mode=WAL;")
+                            conn.execute("PRAGMA synchronous=NORMAL;")
+                        except sqlite3.Error:
+                            pass
+                    else:
+                        raise DatabaseError(f"DB corrupt and recovery failed: {e}") from e
+                else:
+                    raise
             return conn
         except sqlite3.Error as e:
             logger.error(
@@ -367,7 +436,7 @@ class DatabaseManager:
             )
             raise DatabaseError(f"DB connect fail: {e}") from e
 
-    def _quarantine_corrupt_db(self):
+    def _quarantine_corrupt_db(self, force: bool = False):
         """If the SQLite file exists but is not a healthy database, move it
         aside so schema init recreates a fresh one.
 
@@ -377,66 +446,151 @@ class DatabaseManager:
         database' / 'database disk image is malformed' (~30k ERROR lines per
         run, all ReID/incident/metrics persistence lost). quick_check catches
         both; the corrupt file and its -wal/-shm sidecars are quarantined,
-        not deleted.
+        not deleted. force=True skips quick_check -- needed mid-run, where a
+        hot -wal can mask a garbage main file from quick_check (WAL replay
+        presents a valid view) even though the file-level header is bad.
         """
         path = Path(self.sqlite_db_path)
         if not path.exists():
             return
-        try:
-            conn = sqlite3.connect(str(path), timeout=5.0)
+        if not force:
             try:
-                row = conn.execute("PRAGMA quick_check;").fetchone()
-                if row and row[0] == "ok":
-                    return
-                raise sqlite3.DatabaseError(f"quick_check reported: {row[0] if row else 'no rows'}")
+                conn = sqlite3.connect(str(path), timeout=5.0)
+                try:
+                    row = conn.execute("PRAGMA quick_check;").fetchone()
+                    if row and row[0] == "ok":
+                        return
+                    raise sqlite3.DatabaseError(f"quick_check reported: {row[0] if row else 'no rows'}")
+                finally:
+                    conn.close()
+            except sqlite3.DatabaseError:
+                pass  # fall through to quarantine below
+        stamp = int(time.time())
+        quarantine = path.with_name(f"{path.name}.corrupt-{stamp}")
+        try:
+            path.rename(quarantine)
+            for suffix in ("-wal", "-shm"):
+                side = path.with_name(path.name + suffix)
+                if side.exists():
+                    side.rename(side.with_name(side.name + f".corrupt-{stamp}"))
+            logger.error(
+                f"SQLite DB {path} quarantined to {quarantine.name} -- "
+                "a fresh database will be created."
+            )
+        except OSError as qe:
+            logger.error(f"Could not quarantine corrupt DB {path}: {qe}")
+
+    def _try_acquire_schema_lock(self) -> bool:
+        """Cross-process guard so only ONE process ever runs schema DDL.
+
+        Every DatabaseManager (DB writer, each inference worker, the prune
+        thread) used to run CREATE TABLE / ALTER concurrently on the same
+        file -- that race corrupted vehicle.db ~30s into the Nov-12 Kaggle
+        run. Redis SET NX makes the first constructor the sole DDL owner; all
+        others skip. If Redis is unreachable, fall back to unlocked DDL
+        (pre-fix behavior) so a missing Redis never blocks boot.
+        """
+        try:
+            from app.utils.redis_client import get_redis_client
+            r = get_redis_client(decode_responses=True)
+            return bool(r.set(_SCHEMA_LOCK_KEY, f"pid={os.getpid()}", nx=True, ex=_SCHEMA_LOCK_TTL))
+        except Exception as e:
+            logger.warning(f"Schema-init lock unavailable ({e}); proceeding without it.")
+            return True
+
+    def _release_schema_lock(self):
+        try:
+            from app.utils.redis_client import get_redis_client
+            get_redis_client(decode_responses=True).delete(_SCHEMA_LOCK_KEY)
+        except Exception:
+            pass
+
+    def _recover_corrupt_db(self) -> bool:
+        """Mid-run self-heal: quarantine the corrupt file, recreate fresh schema.
+
+        Called when a connection liveness probe hits 'file is not a database' /
+        'malformed'. Returns True when a fresh valid DB now exists at
+        sqlite_db_path. Deliberately skips the schema lock: the corrupt file
+        has been moved aside, so there is nothing left to race on, and every
+        process recovers the same way on its next connection.
+        """
+        if not self.sqlite_db_path:
+            return False
+        # force=True: the caller's liveness probe already proved the file is
+        # corrupt at the file level (header magic), which quick_check alone
+        # can miss when a hot -wal masks the main file.
+        self._quarantine_corrupt_db(force=True)
+        path = Path(self.sqlite_db_path)
+        if path.exists():
+            return False  # quarantine failed; surface the original error
+        try:
+            conn = sqlite3.connect(str(path), timeout=10.0)
+            try:
+                cursor = conn.cursor()
+                self._create_sqlite_tables(cursor)
+                self._migrate_sqlite_database(cursor)
+                conn.commit()
             finally:
                 conn.close()
-        except sqlite3.DatabaseError as e:
-            stamp = int(time.time())
-            quarantine = path.with_name(f"{path.name}.corrupt-{stamp}")
+            orm_engine = create_engine(f"sqlite:///{path}")
             try:
-                path.rename(quarantine)
-                for suffix in ("-wal", "-shm"):
-                    side = path.with_name(path.name + suffix)
-                    if side.exists():
-                        side.rename(side.with_name(side.name + f".corrupt-{stamp}"))
-                logger.error(
-                    f"SQLite DB {path} failed integrity check ({e}); quarantined to "
-                    f"{quarantine.name} -- a fresh database will be created."
+                Base.metadata.create_all(orm_engine)
+            finally:
+                orm_engine.dispose()
+            # Re-point this process's async engine at the new file so pooled
+            # connections stop writing into the quarantined inode.
+            try:
+                self.async_engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
+                self.async_session_factory = sessionmaker(
+                    self.async_engine, class_=AsyncSession, expire_on_commit=False
                 )
-            except OSError as qe:
-                logger.error(f"Could not quarantine corrupt DB {path}: {qe}")
+            except Exception as e:
+                logger.warning(f"Could not recreate async engine after recovery: {e}")
+            logger.error(f"Fresh SQLite DB created at {path} after mid-run corruption recovery.")
+            return True
+        except Exception as e:
+            logger.error(f"Mid-run corruption recovery failed: {e}", exc_info=True)
+            return False
 
     def _initialize_sqlite_database(self):
         if not self.sqlite_db_path:
             logger.error("Cannot initialize SQLite DB: path not set.")
             return
-        self._quarantine_corrupt_db()
-        logger.info(f"Initializing SQLite DB schema at {self.sqlite_db_path}...")
+        if not self._try_acquire_schema_lock():
+            logger.info(
+                "SQLite schema-init lock held by another process; skipping DDL "
+                "(the first DatabaseManager in the run owns the schema)."
+            )
+            return
         try:
-            with self._get_sqlite_connection() as conn:
-                cursor = conn.cursor()
-                self._create_sqlite_tables(cursor)
-                self._migrate_sqlite_database(cursor)
-                conn.commit()
-            # Create ORM-model tables (user_profiles, route_history,
-            # proactive_suggestion_feedback_log, prediction_logs) that the raw
-            # statements above don't cover. create_all is checkfirst, so
-            # existing tables (e.g. a narrow prediction_logs) are left alone;
-            # _migrate_sqlite_database backfills their columns.
-            orm_engine = create_engine(f"sqlite:///{self.sqlite_db_path}")
+            self._quarantine_corrupt_db()
+            logger.info(f"Initializing SQLite DB schema at {self.sqlite_db_path}...")
             try:
-                Base.metadata.create_all(orm_engine)
-            finally:
-                orm_engine.dispose()
-            logger.info("SQLite DB schema initialization check complete.")
-            
-            # Auto-prune on startup
-            self.prune_old_data()
-            
-        except (sqlite3.Error, DatabaseError) as e:
-            logger.error(f"DB init error: {e}", exc_info=True)
-            raise DatabaseError(f"DB schema init fail: {e}") from e
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    self._create_sqlite_tables(cursor)
+                    self._migrate_sqlite_database(cursor)
+                    conn.commit()
+                # Create ORM-model tables (user_profiles, route_history,
+                # proactive_suggestion_feedback_log, prediction_logs) that the raw
+                # statements above don't cover. create_all is checkfirst, so
+                # existing tables (e.g. a narrow prediction_logs) are left alone;
+                # _migrate_sqlite_database backfills their columns.
+                orm_engine = create_engine(f"sqlite:///{self.sqlite_db_path}")
+                try:
+                    Base.metadata.create_all(orm_engine)
+                finally:
+                    orm_engine.dispose()
+                logger.info("SQLite DB schema initialization check complete.")
+
+                # Auto-prune on startup
+                self.prune_old_data()
+
+            except (sqlite3.Error, DatabaseError) as e:
+                logger.error(f"DB init error: {e}", exc_info=True)
+                raise DatabaseError(f"DB schema init fail: {e}") from e
+        finally:
+            self._release_schema_lock()
 
     def _migrate_sqlite_database(self, cursor: sqlite3.Cursor):
         """Adds missing columns to existing tables if they don't exist."""

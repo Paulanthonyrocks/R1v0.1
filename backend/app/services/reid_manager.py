@@ -3,7 +3,7 @@ import numpy as np
 import pickle
 import os
 import threading
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import logging
 from threading import RLock
 
@@ -105,6 +105,31 @@ class GlobalReIDManager:
         self.db_manager = db_manager
         if not self.gallery_ids:
             self.load_state()
+
+    def _persist_reid_identity(self, global_id: str, embeddings: Any, metadata: Dict, last_seen: float):
+        """Persist a ReID identity via the single-writer db_writes queue.
+
+        Inference workers must not write SQLite directly -- multi-process
+        writes are what corrupted vehicle.db on the Nov-12 Kaggle run. The
+        DatabaseWriter process owns all queue-driven writes. Items are
+        pickled to match RedisQueue serialization (key q:db_writes). Falls
+        back to a direct save if the queue push fails, so the gallery is
+        never silently dropped.
+        """
+        data = {
+            "global_id": global_id,
+            "embeddings": embeddings,
+            "metadata": self.metadata_store.get(global_id, {}).get("metadata", metadata),
+            "last_seen": last_seen,
+        }
+        try:
+            if self.redis:
+                self.redis.rpush("q:db_writes", pickle.dumps({"type": "reid_identity", "data": data}))
+                return
+        except Exception as e:
+            logger.warning(f"ReID identity queue push failed ({e}); falling back to direct DB write.")
+        if self.db_manager is not None:
+            self.db_manager.save_reid_identity(**data)
 
     def shutdown(self):
         """Gracefully shuts down the ReID manager and persists state."""
@@ -446,12 +471,7 @@ class GlobalReIDManager:
                     logger.error(f"Redis sync error: {e}")
 
             if self.db_manager:
-                self.db_manager.save_reid_identity(
-                    global_id=global_id, 
-                    embeddings=sync_emb, 
-                    metadata=self.metadata_store.get(global_id, {}).get("metadata", metadata), 
-                    last_seen=now
-                )
+                self._persist_reid_identity(global_id, sync_emb, metadata, now)
 
         if self.redis:
             try:
