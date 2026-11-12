@@ -389,52 +389,94 @@ class DatabaseManager:
         if not self.sqlite_db_path:
             raise DatabaseError("SQLite database path not configured.")
         path = Path(self.sqlite_db_path)
-        try:
-            conn = sqlite3.connect(str(self.sqlite_db_path), timeout=10.0)
-            conn.row_factory = sqlite3.Row
+        # Transient mount errors (e.g. "disk I/O error" from the -shm mmap on
+        # Kaggle's /kaggle/working) are retried here; only the LAST attempt is
+        # raised, as the original OperationalError, so callers' retry
+        # decorators (tenacity on OperationalError) and the DB writer's
+        # circuit-breaker see the real error type.
+        for attempt in range(3):
+            conn = None
             try:
-                conn.execute("PRAGMA busy_timeout=10000;")
-                conn.execute("PRAGMA journal_mode=WAL;")
-                conn.execute("PRAGMA synchronous=NORMAL;")
-            except sqlite3.Error as e:
-                if not getattr(self, "_wal_warned", False):
+                conn = sqlite3.connect(str(self.sqlite_db_path), timeout=10.0)
+                conn.row_factory = sqlite3.Row
+                # Journal-mode cascade: WAL needs a working -shm mmap, which
+                # fails with "disk I/O error" on some persistent mounts
+                # (/kaggle/working). DELETE (rollback journal) needs no shm.
+                journal_mode = None
+                for mode in ("WAL", "DELETE"):
+                    try:
+                        conn.execute(f"PRAGMA journal_mode={mode};")
+                        journal_mode = mode
+                        break
+                    except sqlite3.Error:
+                        continue
+                if journal_mode != "WAL" and not getattr(self, "_wal_warned", False):
                     logger.warning(
-                        f"Could not set WAL mode on {self.sqlite_db_path}: {e} "
-                        "(journal-mode fallback; concurrent-write corruption risk elevated)"
+                        f"WAL mode unavailable on {self.sqlite_db_path} "
+                        f"(journal_mode={journal_mode or 'unchanged'}); "
+                        "running without WAL -- concurrent-write corruption risk elevated"
                     )
                     self._wal_warned = True
-            # Liveness probe: raises immediately on a corrupt file, so mid-run
-            # corruption self-heals on the next connection instead of failing
-            # every write for the rest of the run (Nov-12 Kaggle behavior:
-            # 949 ERROR / 122 CRITICAL from one corrupt vehicle.db).
-            try:
-                self._raise_if_db_file_corrupt(path)
-                conn.execute("SELECT name FROM sqlite_master LIMIT 1;").fetchone()
-            except sqlite3.DatabaseError as e:
-                if _is_corruption_error(e):
-                    conn.close()
-                    logger.error(
-                        f"SQLite DB {self.sqlite_db_path} failed liveness probe ({e}); "
-                        "quarantining and recreating a fresh database."
-                    )
-                    if self._recover_corrupt_db():
-                        conn = sqlite3.connect(str(self.sqlite_db_path), timeout=10.0)
-                        conn.row_factory = sqlite3.Row
-                        try:
-                            conn.execute("PRAGMA journal_mode=WAL;")
-                            conn.execute("PRAGMA synchronous=NORMAL;")
-                        except sqlite3.Error:
-                            pass
+                try:
+                    conn.execute("PRAGMA busy_timeout=10000;")
+                    conn.execute("PRAGMA synchronous=NORMAL;")
+                except sqlite3.Error:
+                    pass
+                # Liveness probe: raises immediately on a corrupt file, so mid-run
+                # corruption self-heals on the next connection instead of failing
+                # every write for the rest of the run (Nov-12 Kaggle behavior:
+                # 949 ERROR / 122 CRITICAL from one corrupt vehicle.db).
+                try:
+                    self._raise_if_db_file_corrupt(path)
+                    conn.execute("SELECT name FROM sqlite_master LIMIT 1;").fetchone()
+                except sqlite3.DatabaseError as e:
+                    if conn is not None:
+                        conn.close()
+                        conn = None
+                    if _is_corruption_error(e):
+                        logger.error(
+                            f"SQLite DB {self.sqlite_db_path} failed liveness probe ({e}); "
+                            "quarantining and recreating a fresh database."
+                        )
+                        if self._recover_corrupt_db():
+                            conn = sqlite3.connect(str(self.sqlite_db_path), timeout=10.0)
+                            conn.row_factory = sqlite3.Row
+                            try:
+                                conn.execute("PRAGMA journal_mode=DELETE;")
+                                conn.execute("PRAGMA synchronous=NORMAL;")
+                            except sqlite3.Error:
+                                pass
+                        else:
+                            raise DatabaseError(f"DB corrupt and recovery failed: {e}") from e
+                    elif isinstance(e, sqlite3.OperationalError) and attempt < 2:
+                        time.sleep(0.25 * (attempt + 1))
+                        continue
                     else:
-                        raise DatabaseError(f"DB corrupt and recovery failed: {e}") from e
-                else:
-                    raise
-            return conn
-        except sqlite3.Error as e:
-            logger.error(
-                f"Failed to connect to DB {self.sqlite_db_path}: {e}", exc_info=True
-            )
-            raise DatabaseError(f"DB connect fail: {e}") from e
+                        raise
+                return conn
+            except sqlite3.OperationalError:
+                # transient (disk I/O on the mount / locked): retry, and on
+                # the last attempt re-raise UNWRAPPED so tenacity decorators
+                # keyed on OperationalError still fire
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except sqlite3.Error:
+                        pass
+                if attempt < 2:
+                    time.sleep(0.25 * (attempt + 1))
+                    continue
+                raise
+            except sqlite3.Error as e:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except sqlite3.Error:
+                        pass
+                logger.error(
+                    f"Failed to connect to DB {self.sqlite_db_path}: {e}", exc_info=True
+                )
+                raise DatabaseError(f"DB connect fail: {e}") from e
 
     def _quarantine_corrupt_db(self, force: bool = False):
         """If the SQLite file exists but is not a healthy database, move it
