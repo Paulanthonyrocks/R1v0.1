@@ -8,15 +8,40 @@ import httpx
 
 from .external_api_client import BaseApiClient, ExternalAPIError
 
+# WMO weather interpretation codes (Open-Meteo) -> plain-language conditions.
+_WMO_CODES = {
+    0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+    45: "Fog", 48: "Depositing rime fog",
+    51: "Light drizzle", 53: "Drizzle", 55: "Dense drizzle",
+    56: "Freezing drizzle", 57: "Freezing drizzle",
+    61: "Light rain", 63: "Rain", 65: "Heavy rain",
+    66: "Freezing rain", 67: "Freezing rain",
+    71: "Light snow", 73: "Snow", 75: "Heavy snow", 77: "Snow grains",
+    80: "Light rain showers", 81: "Rain showers", 82: "Heavy rain showers",
+    85: "Snow showers", 86: "Heavy snow showers",
+    95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Thunderstorm with hail",
+}
+
+# Keyless default provider: no signup, no API key, CORS-open.
+DEFAULT_OPEN_METEO_URL = "https://api.open-meteo.com/v1/"
+
 
 class WeatherService(BaseApiClient):
     """
     Service for fetching and caching weather data from a third-party API.
+
+    provider="open-meteo" (default when no api_key is configured) uses the
+    keyless Open-Meteo API; provider="openweathermap" keeps the legacy
+    appid-based path.
     """
 
-    def __init__(self, api_key: str, api_url: str, cache_ttl_minutes: int = 10, timeout: float = 10.0):
+    def __init__(self, api_key: str, api_url: str, cache_ttl_minutes: int = 10, timeout: float = 10.0,
+                 provider: str = "openweathermap"):
+        if provider == "open-meteo" and not api_url:
+            api_url = DEFAULT_OPEN_METEO_URL
         super().__init__(base_url=api_url, timeout=timeout)
         self.api_key = api_key
+        self.provider = provider
         # self.api_url = api_url # Handled by BaseApiClient
         self.cache_ttl = timedelta(minutes=cache_ttl_minutes)
         self._cache: Dict[str, Dict[str, Any]] = {}
@@ -34,13 +59,25 @@ class WeatherService(BaseApiClient):
         else:
             # Fetch new data using the base API client
             try:
-                response = await self._make_request(
-                    method="GET",
-                    url="data/2.5/weather",
-                    params={"lat": lat, "lon": lon, "appid": self.api_key, "units": "metric"},
-                )
-
-                weather_data = response.json()
+                if self.provider == "open-meteo":
+                    response = await self._make_request(
+                        method="GET",
+                        url="forecast",
+                        params={
+                            "latitude": lat,
+                            "longitude": lon,
+                            "current": "temperature_2m,relative_humidity_2m,"
+                                       "precipitation_probability,weather_code,wind_speed_10m",
+                        },
+                    )
+                    weather_data = self._from_open_meteo(response.json())
+                else:
+                    response = await self._make_request(
+                        method="GET",
+                        url="data/2.5/weather",
+                        params={"lat": lat, "lon": lon, "appid": self.api_key, "units": "metric"},
+                    )
+                    weather_data = response.json()
                 self._validate_weather_data(weather_data)
 
                 # Cache the data
@@ -75,6 +112,28 @@ class WeatherService(BaseApiClient):
             "precipitation_chance": self._calculate_precipitation_chance(weather_data),
             "wind_speed": weather_data["wind"]["speed"],
         }
+
+    @staticmethod
+    def _from_open_meteo(payload: Any) -> Dict[str, Any]:
+        """Normalize an Open-Meteo `current` payload into the OpenWeatherMap-ish
+        shape the rest of this service (validation, precip chance, severity)
+        already consumes. Wind is converted km/h -> m/s to match OWM metric."""
+        if not isinstance(payload, dict) or not isinstance(payload.get("current"), dict):
+            raise ValueError("Open-Meteo payload missing 'current' object")
+        cur = payload["current"]
+        code = cur.get("weather_code", 0)
+        conditions = _WMO_CODES.get(code, "Unknown")
+        wind_kmh = cur.get("wind_speed_10m")
+        wind_ms = wind_kmh / 3.6 if isinstance(wind_kmh, (int, float)) and not isinstance(wind_kmh, bool) else wind_kmh
+        data: Dict[str, Any] = {
+            "main": {"temp": cur.get("temperature_2m")},
+            "weather": [{"main": conditions}],
+            "wind": {"speed": wind_ms},
+        }
+        pop = cur.get("precipitation_probability")
+        if isinstance(pop, (int, float)) and not isinstance(pop, bool):
+            data["pop"] = pop / 100.0  # percent -> fraction, like OWM
+        return data
 
     @staticmethod
     def _validate_weather_data(data: Any) -> None:

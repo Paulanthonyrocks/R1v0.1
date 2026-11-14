@@ -1277,7 +1277,20 @@ vis_options_default:
 - Grid Overlay
 - Lane Lines
 weather_service:
-  enabled: false
+  enabled: true
+  # Keyless provider (Open-Meteo): no signup, no API key, CORS-open.
+  # Set provider: openweathermap + api_key + api_url to use OpenWeatherMap instead.
+  provider: open-meteo
+  api_url: "https://api.open-meteo.com/v1/"
+  cache_ttl_minutes: 10
+event_service:
+  enabled: true
+  # No external api_url: serve the system's own active incidents from the local
+  # DB as events (keyless, always available). Set api_url + source: api for an
+  # external events feed.
+  source: incidents
+  cache_ttl_minutes: 5
+  limit: 50
 websocket:
   max_connections: 1000
   # Aligned with the frontend's REAL keepalive: WebSocketClient.ts sends its

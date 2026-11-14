@@ -203,19 +203,20 @@ class ServiceRegistry:
             self._v2x_service = V2XService(config=config)
             logger.info("V2XService initialized.")
 
-            # Weather Service (gated: no enabled flag + api_url means no
-            # provider; previously constructed unconditionally and failed
-            # on every call against the empty URL).
+            # Weather Service (gated on enabled; keyless Open-Meteo is the default
+            # provider when no api_key is set -- no api_url needed either).
             _weather_cfg = config.get("weather_service", {})
-            if _weather_cfg.get("enabled", False) and _weather_cfg.get("api_url"):
+            if _weather_cfg.get("enabled", False):
+                _api_key = _weather_cfg.get("api_key", "")
                 self._weather_service = WeatherService(
                     api_url=_weather_cfg.get("api_url", ""),
-                    api_key=_weather_cfg.get("api_key", "demo-key"),
+                    api_key=_api_key,
                     cache_ttl_minutes=_weather_cfg.get("cache_ttl_minutes", 10),
+                    provider=_weather_cfg.get("provider", "open-meteo" if not _api_key else "openweathermap"),
                 )
-                logger.info("WeatherService initialized.")
+                logger.info(f"WeatherService initialized (provider={self._weather_service.provider}).")
             else:
-                logger.info("WeatherService skipped (disabled or no api_url).")
+                logger.info("WeatherService skipped (disabled).")
 
             # Incident Manager
             self._incident_manager = IncidentManager(
@@ -360,20 +361,22 @@ class ServiceRegistry:
     ) -> None:
         """Initialize optional services that can fail without breaking the app."""
         
-        # Event Service (gated: no event_service.api_url in config means no
-        # provider; previously constructed unconditionally with an empty URL
-        # and failed on every call).
+        # Event Service (enabled by default; no api_url => serves the system's
+        # own active incidents from the local DB as events, keyless).
         try:
             _event_cfg = config.get("event_service", {})
-            if not _event_cfg.get("api_url"):
-                logger.info("EventService skipped (no event_service.api_url).")
-                self._event_service = None
-            else:
+            if _event_cfg.get("enabled", True):
                 self._event_service = EventService(
                     api_url=_event_cfg.get("api_url", ""),
-                    cache_ttl_minutes=_event_cfg.get("cache_ttl_minutes", 30),
+                    cache_ttl_minutes=_event_cfg.get("cache_ttl_minutes", 5),
+                    db_manager=db_manager,
+                    source=_event_cfg.get("source", ""),
+                    limit=_event_cfg.get("limit", 50),
                 )
-                logger.info("EventService initialized.")
+                logger.info(f"EventService initialized (source={self._event_service.source}).")
+            else:
+                logger.info("EventService skipped (disabled).")
+                self._event_service = None
         except Exception as e:
             logger.warning(f"EventService initialization failed (non-critical): {e}")
             self._event_service = None
