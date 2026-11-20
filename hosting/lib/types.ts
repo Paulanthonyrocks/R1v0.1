@@ -245,6 +245,7 @@ export interface VehicleFrontendData {
   behavior: string;
   confidence: number;
   is_occluded: boolean;
+  quality?: number; // 0..1 track quality score (backend track["quality"])
   status: 'active' | 'tentative' | 'predicting' | 'unknown';
   lane: number;
   vx?: number;
@@ -304,6 +305,14 @@ export interface SurveillanceFeedMessage {
     lane_changes_by_lane?: Record<string, number>;
   };
   collision?: { pairs?: number; overlaps?: number; collisions_frame?: number; collisions_total?: number };
+
+  // Perception-quality batch
+  avg_track_quality?: number;      // mean 0..1 track quality over live tracks
+  low_quality_tracks?: number;     // tracks below tracking.quality.low_quality_threshold
+  occluded_tracks?: number;        // tracks flagged occluded this frame
+  frames_skipped?: number;         // deliberate skips (cadence + motion), not drops
+  frames_processed?: number;
+  frames_dropped?: number;
 }
 
 export interface VideoFrameMessage {

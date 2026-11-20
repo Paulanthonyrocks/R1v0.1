@@ -524,6 +524,10 @@ def inference_worker(
     traffic_monitors: Dict[str, TrafficMonitor] = {}
     pending_configs: Dict[str, Dict] = {}
     metrics_map: Dict[str, WorkerMetrics] = {}
+    # Scene-motion adaptive skip state: last DETECTED frame's downscaled
+    # grayscale per feed (reference for the motion diff). One entry per
+    # feed; cleared when the feed tears down.
+    _last_motion_gray: Dict[str, "np.ndarray"] = {}
     # feed_id -> {"ts": float, "error": str}; failed CoreModule builds are
     # cached here so a broken init is retried on a backoff, not per frame.
     core_fail_state: Dict[str, Dict] = {}
@@ -567,6 +571,15 @@ def inference_worker(
     skip_frames = inference_cfg.get("skip_frames", vehicle_det_cfg.get("skip_frames", 2))
     skip_frames_base = skip_frames  # baseline cadence; adaptive skip multiplies this
     skip_factor = 1.0  # baseline cadence; adaptive skip multiplies this. Initialised at boot, not lazily in the loop.
+    # Scene-motion adaptive skip (inference.motion_skip): a cadence-detect
+    # frame whose downscaled grayscale mean-abs-diff vs the last DETECTED
+    # frame is below diff_threshold is forwarded as a passthrough without
+    # GPU inference and counted in frames_skipped. Off by default; the
+    # backlog-driven skip_factor above stays the load-shedding valve.
+    motion_cfg = inference_cfg.get("motion_skip", {}) or {}
+    motion_skip_enabled = bool(motion_cfg.get("enabled", False))
+    motion_diff_threshold = float(motion_cfg.get("diff_threshold", 2.0))
+    motion_resize = tuple(motion_cfg.get("resize", [96, 54]))
     is_trt_engine = False  # set True once a static-batch TensorRT engine is loaded
     model_path = vehicle_det_cfg.get("model_path")
 
@@ -1020,6 +1033,7 @@ def inference_worker(
                         traffic_monitors.pop(feed_id, None)
                         pending_configs.pop(feed_id, None)
                         metrics_map.pop(feed_id, None)
+                        _last_motion_gray.pop(feed_id, None)
                         if msg_id and hasattr(slot_q_ref, "ack"):
                             slot_q_ref.ack(msg_id)
                             acked_msgs.add(msg_id)
@@ -1233,6 +1247,38 @@ def inference_worker(
                             continue
 
                         core.last_activity = time.time()
+
+                    # Scene-motion adaptive skip: decode happened because the
+                    # cadence said "detect" (or lane frame). Compare against
+                    # the last DETECTED frame; if the scene is static, drop
+                    # this frame to the passthrough path (frame=None below)
+                    # and count it as a deliberate skip, not a drop.
+                    if motion_skip_enabled and should_detect and frame is not None:
+                        try:
+                            _g = cv2.resize(
+                                cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),
+                                (int(motion_resize[0]), int(motion_resize[1])),
+                            )
+                            _prev = _last_motion_gray.get(feed_id)
+                            if _prev is not None and _prev.shape == _g.shape:
+                                _diff = float(np.mean(np.abs(
+                                    _g.astype(np.float32) - _prev.astype(np.float32)
+                                )))
+                                if _diff < motion_diff_threshold:
+                                    should_detect = False
+                                    metrics_obj.frames_skipped += 1
+                                    # Lane frames keep the decoded image (lane
+                                    # detection still runs predict-only); pure
+                                    # detect frames fall to the passthrough path.
+                                    if not is_lane_frame:
+                                        frame = None
+                                else:
+                                    _last_motion_gray[feed_id] = _g
+                            else:
+                                _last_motion_gray[feed_id] = _g
+                        except Exception as e:
+                            # Motion probe is best-effort; never fail the frame.
+                            logger.debug(f"[Worker {worker_id}][{feed_id}] motion probe failed: {e}")
 
                     _stage_totals["shm_read_decode"] += time.perf_counter() - _t0
                     meta_entry = {

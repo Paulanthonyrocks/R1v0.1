@@ -544,6 +544,36 @@ class GlobalReIDManager:
                 self.gallery_matrix[idx] = embedding
                 logger.debug(f"Synced Updated ReID: {gid}")
 
+    def _enforce_cap_locked(self):
+        """Evict oldest last_seen beyond max_gallery_size. Caller holds the lock.
+
+        The pub/sub path (_sync_single_id_from_redis) and the Redis cache-hit
+        path append without checking the cap; _cleanup trims every 60s, but a
+        burst between cleanups could otherwise grow the gallery matrix past
+        the bound. O(n log n) sort, bounded by the cap.
+        """
+        overflow = len(self.gallery_ids) - self.max_gallery_size
+        if overflow <= 0:
+            return
+        order = sorted(
+            range(len(self.gallery_ids)),
+            key=lambda i: self.metadata_store.get(self.gallery_ids[i], {}).get("last_seen", 0),
+        )
+        drop = set(order[:overflow])
+        keep = [i for i in range(len(self.gallery_ids)) if i not in drop]
+        dropped_ids = {self.gallery_ids[i] for i in drop}
+        self.gallery_ids = [self.gallery_ids[i] for i in keep]
+        self.gallery_matrix = self.gallery_matrix[keep] if self.gallery_matrix is not None else None
+        self.metadata_store = {g: m for g, m in self.metadata_store.items() if g not in dropped_ids}
+        current = set(self.gallery_ids)
+        for feed_id in list(self.local_to_global.keys()):
+            self.local_to_global[feed_id] = {
+                lid: gid for lid, gid in self.local_to_global[feed_id].items() if gid in current
+            }
+            if not self.local_to_global[feed_id]:
+                del self.local_to_global[feed_id]
+        logger.info(f"ReID cap: evicted {len(dropped_ids)} oldest identities (gallery={len(self.gallery_ids)}/{self.max_gallery_size}).")
+
     def _sync_single_id_from_redis(self, gid: str):
         if not self.redis or not gid: return
         if gid in self.gallery_ids: return
@@ -564,6 +594,10 @@ class GlobalReIDManager:
                         "last_seen": float(meta.get(b"last_seen", time.time())),
                         "metadata": {"class_name": meta.get(b"class_name", b"unknown").decode('utf-8')}
                     }
+                    # Pub/sub appends bypass _cleanup's 60s cadence; enforce
+                    # the gallery cap here so a sync burst can't grow the
+                    # matrix unbounded between cleanups.
+                    self._enforce_cap_locked()
         except Exception as e:
             logger.error(f"Failed to sync single ReID {gid}: {e}")
 
@@ -699,3 +733,22 @@ class GlobalReIDManager:
         # workers query Redis/DB and avoid periodic disk churn.
         if not self.db_manager and self.is_owner:
             self.save_state()
+
+        # Gallery-bound prune of the PERSISTED reid_identities table. Goes
+        # through the single-writer db_writes queue when Redis is up (workers
+        # must not write SQLite directly -- multi-process writes corrupted
+        # vehicle.db on the Nov-12 run); direct call only for a db_manager-
+        # backed, non-Redis manager (same fallback rule as
+        # _persist_reid_identity).
+        if self.reid_cfg.get("db_prune_enabled", True):
+            prune = {
+                "keep": int(self.reid_cfg.get("db_prune_keep", 5000)),
+                "max_age_seconds": float(self.ttl_seconds),
+            }
+            try:
+                if self.redis:
+                    self.redis.rpush("q:db_writes", pickle.dumps({"type": "prune_reid_identities", "data": prune}))
+                elif self.db_manager is not None:
+                    self.db_manager.prune_reid_identities(**prune)
+            except Exception as e:
+                logger.warning(f"ReID DB prune dispatch failed: {e}")

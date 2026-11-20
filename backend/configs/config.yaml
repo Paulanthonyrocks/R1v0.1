@@ -169,6 +169,16 @@ inference:
   # cards genuinely loaded, raise yolo_imgsz / re-export the TRT engine
   # at 640+ (the engine caps input at 320) or add more feeds.
   skip_frames: 0
+  # Scene-motion adaptive skip: when enabled, a cadence-detect frame whose
+  # downscaled (resize) grayscale mean-abs-diff vs the last DETECTED frame is
+  # below diff_threshold is forwarded as a passthrough WITHOUT GPU inference
+  # and counted in frames_skipped (deliberate skip, not frames_dropped). The
+  # backlog-driven performance.global_skip_factor stays the load-shedding
+  # valve; this one sheds work on static scenes. Off by default.
+  motion_skip:
+    enabled: false
+    diff_threshold: 2.0
+    resize: [96, 54]
 ingestion:
   shared_memory_ipc: true
 interface:
@@ -1001,6 +1011,20 @@ tracking:
   velocity_gate_boost: 3.0
   base_gate_multiplier: 1.0
   appearance_weight: 0.5
+  # Perception-quality batch: per-track quality score (confidence EMA +
+  # probation hit ratio, decayed on miss) and the pairwise occlusion pass
+  # (a track whose bbox is >= occlusion_cover_ratio covered by a more
+  # confident track is flagged occluded). Aggregates surface as
+  # avg_track_quality / low_quality_tracks / occluded_tracks in feed metrics.
+  quality:
+    enabled: true
+    conf_weight: 0.6
+    hit_weight: 0.4
+    ema_alpha: 0.3
+    miss_decay: 0.95
+    low_quality_threshold: 0.4
+    occlusion_enabled: true
+    occlusion_cover_ratio: 0.6
 traffic_predictor_model_path: models/traffic_predictor_model.h5
 v2x:
   broadcast_ip: 255.255.255.255
@@ -1193,6 +1217,12 @@ vehicle_detection:
     # Persistence note: reid_gallery.pkl + DB keep state across restarts, so
     # this TTL governs the Redis in-memory gallery view.
     ttl_seconds: 14400
+    # Persisted-gallery prune: during gallery cleanup the reid_identities
+    # table is pruned to db_prune_keep most-recent rows and max_age =
+    # ttl_seconds. Dispatched via the single-writer q:db_writes queue
+    # (handled by database_writer -> prune_reid_identities).
+    db_prune_enabled: true
+    db_prune_keep: 5000
   reid_enabled: true
   # Per-frame ReID MATCH budget (read by inference_worker.py). Caps how many
   # NEW tracks run match_or_register per detect frame; each costs ~5 sync Redis

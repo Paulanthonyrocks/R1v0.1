@@ -55,6 +55,24 @@ def feed_health_score(*,
         score -= 10.0
         factors["uncalibrated"] = True
 
+    # Perception-quality signals: a large share of low-quality or occluded
+    # tracks means the detection layer is degraded even if fps looks fine.
+    tv = m.get("total_vehicles")
+    try:
+        tv_n = float(tv) if tv is not None else 0.0
+    except (TypeError, ValueError):
+        tv_n = 0.0
+    if tv_n > 0:
+        lq = m.get("low_quality_tracks")
+        if isinstance(lq, (int, float)) and lq / tv_n > 0.3:
+            score -= 5.0
+            factors["low_quality_tracks"] = lq
+        occ = m.get("occluded_tracks")
+        if isinstance(occ, (int, float)) and occ / tv_n > 0.3:
+            score -= 5.0
+            factors["occluded_tracks"] = occ
+
+
     congestion = m.get("congestion_index", m.get("congestion_level_percent"))
     if isinstance(congestion, (int, float)) and congestion >= 80.0:
         score -= 5.0

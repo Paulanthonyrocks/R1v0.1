@@ -201,6 +201,13 @@ class TrafficMonitor:
         )
         self._passage_last_seen: Dict[Any, float] = {}
 
+        # Perception-quality batch: threshold for low_quality_tracks (the
+        # tracker writes per-track "quality" / "occluded"; the aggregates
+        # land here in get_metrics).
+        self.low_quality_threshold: float = float(
+            config.get("tracking", {}).get("quality", {}).get("low_quality_threshold", 0.4)
+        )
+
     def update_vehicles(self, vehicles: Dict[str, Dict[str, Any]]):
         now = time.time()
         self.tracked_vehicles = vehicles
@@ -420,6 +427,20 @@ class TrafficMonitor:
 
         lane_occupancy: Dict[int, float] = {}
         lane_queues: Dict[int, float] = {}
+
+        # Per-track quality / occlusion aggregates over the live tracks.
+        qualities = []
+        low_quality = 0
+        occluded = 0
+        for data in self.tracked_vehicles.values():
+            q = data.get("quality")
+            if isinstance(q, (int, float)) and q == q:
+                qualities.append(float(q))
+                if float(q) < self.low_quality_threshold:
+                    low_quality += 1
+            if data.get("occluded"):
+                occluded += 1
+        avg_track_quality = round(sum(qualities) / len(qualities), 3) if qualities else 0.0
         
         # Ensure all configured lanes are represented, even if empty
         lane_cfg = self.config.get("lane_detection", {})
@@ -465,4 +486,7 @@ class TrafficMonitor:
             "anomalies": self.anomalies[-5:],
             "speed_calibrated": speed_calibrated,
             "speed_confidence": speed_confidence,
+            "avg_track_quality": avg_track_quality,
+            "low_quality_tracks": low_quality,
+            "occluded_tracks": occluded,
         }

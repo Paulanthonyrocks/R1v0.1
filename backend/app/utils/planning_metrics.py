@@ -25,6 +25,13 @@ _PLANNING_EXTRA_KEYS = (
     "tailgating",
     "behavior_events",
     "collision",
+    # Perception-quality batch: per-feed track quality / occlusion
+    # aggregates (TrafficMonitor.get_metrics) and the deliberate-skip
+    # counter (WorkerMetrics.to_dict -> frames_skipped).
+    "avg_track_quality",
+    "low_quality_tracks",
+    "occluded_tracks",
+    "frames_skipped",
 )
 
 

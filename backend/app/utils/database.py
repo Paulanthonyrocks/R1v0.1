@@ -117,6 +117,13 @@ class DatabaseManager:
         # Initialize database connections
         self._init_from_config(config)
         self.lock = threading.Lock()
+        # Journal mode is decided once per process (see _detect_journal_mode).
+        # _journal_forced latches the WAL->DELETE header flip so that a mount
+        # which keeps failing AFTER the flip triggers corruption recovery
+        # instead of retrying forever.
+        self._journal_mode: Optional[str] = None
+        self._journal_forced = False
+        self._last_quick_check = 0.0
 
         # Initialize databases
         if self.sqlite_db_path:
@@ -425,6 +432,88 @@ class DatabaseManager:
         except OSError:
             return False
 
+    def _detect_journal_mode(self, path: Path) -> str:
+        """Decide WAL vs DELETE once per process, from the on-disk header flag,
+        and cache the result in self._journal_mode.
+
+        WAL needs a working -shm mmap; on mounts that can't serve it (Kaggle's
+        /kaggle/working, where multi-process opens fail with "disk I/O error")
+        every WAL operation fails. A WAL-flagged header (bytes 18-19 == 2) on
+        such a mount is flipped to DELETE here; once the header says DELETE no
+        process re-attempts WAL, so the header is never rewritten mid-run while
+        other processes hold the file open.
+        """
+        def header_flag():
+            try:
+                if path.stat().st_size < 100:
+                    return None
+                with open(path, "rb") as f:
+                    f.seek(18)
+                    return f.read(2)
+            except OSError:
+                return None
+
+        flag = header_flag()
+        if str(path).startswith("/kaggle"):
+            # Kaggle's /kaggle/working cannot serve the WAL -shm mmap: never
+            # run WAL there. Flip a still-WAL-flagged header to DELETE.
+            mode = "delete"
+            if flag == b"\x02\x02" and self._force_rollback_journal(path):
+                self._journal_forced = True
+        elif flag == b"\x01\x01":
+            mode = "delete"
+        else:
+            mode = "wal"
+        if mode != "wal" and not getattr(self, "_wal_warned", False):
+            logger.warning(
+                f"Running SQLite without WAL on {self.sqlite_db_path} "
+                "(mount cannot serve the WAL -shm mmap); journal_mode=DELETE."
+            )
+            self._wal_warned = True
+        self._journal_mode = mode
+        return mode
+
+    def _recover_corrupt_db_and_connect(self):
+        """Return a healthy connection after quarantine+recreate of a corrupt
+        file. If another process already recreated a healthy file at the path,
+        connect to it instead of quarantining the fresh file. Returns None on
+        failure. Always DELETE mode: recovery only happens on mounts where WAL
+        is broken."""
+        if not self.sqlite_db_path:
+            return None
+        path = Path(self.sqlite_db_path)
+        self._journal_mode = "delete"
+        self._journal_forced = True
+        try:
+            probe = sqlite3.connect(str(path), timeout=10.0)
+            healthy = False
+            try:
+                probe.execute("PRAGMA journal_mode=DELETE;")
+                qc = probe.execute("PRAGMA quick_check(1);").fetchone()
+                healthy = bool(qc and qc[0] == "ok")
+            except sqlite3.Error:
+                healthy = False
+            if healthy:
+                probe.row_factory = sqlite3.Row
+                probe.execute("PRAGMA busy_timeout=10000;")
+                probe.execute("PRAGMA synchronous=NORMAL;")
+                return probe
+            probe.close()
+        except sqlite3.Error:
+            pass
+        if not self._recover_corrupt_db():
+            return None
+        try:
+            conn = sqlite3.connect(str(path), timeout=10.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=DELETE;")
+            conn.execute("PRAGMA busy_timeout=10000;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("SELECT name FROM sqlite_master LIMIT 1;").fetchone()
+            return conn
+        except sqlite3.Error:
+            return None
+
     def _get_sqlite_connection(self) -> sqlite3.Connection:
         if not self.sqlite_db_path:
             raise DatabaseError("SQLite database path not configured.")
@@ -439,70 +528,74 @@ class DatabaseManager:
             try:
                 conn = sqlite3.connect(str(self.sqlite_db_path), timeout=10.0)
                 conn.row_factory = sqlite3.Row
-                # Journal-mode cascade: WAL needs a working -shm mmap, which
-                # fails with "disk I/O error" on some persistent mounts
-                # (/kaggle/working). DELETE (rollback journal) needs no shm.
-                journal_mode = None
-                for mode in ("WAL", "DELETE"):
-                    try:
-                        conn.execute(f"PRAGMA journal_mode={mode};")
-                        journal_mode = mode
-                        break
-                    except sqlite3.Error:
-                        continue
-                if journal_mode != "WAL" and not getattr(self, "_wal_warned", False):
-                    logger.warning(
-                        f"WAL mode unavailable on {self.sqlite_db_path} "
-                        f"(journal_mode={journal_mode or 'unchanged'}); "
-                        "running without WAL -- concurrent-write corruption risk elevated"
-                    )
-                    self._wal_warned = True
+                # Journal mode decided once per process from the on-disk header
+                # flag (see _detect_journal_mode). WAL needs a working -shm
+                # mmap, which fails with "disk I/O error" on mounts like
+                # /kaggle/working; DELETE (rollback journal) needs no shm.
+                mode = self._journal_mode or self._detect_journal_mode(path)
+                try:
+                    conn.execute(f"PRAGMA journal_mode={mode};")
+                except sqlite3.Error:
+                    if mode == "WAL":
+                        # Mount turned out not to serve WAL after all.
+                        conn.execute("PRAGMA journal_mode=DELETE;")
                 try:
                     conn.execute("PRAGMA busy_timeout=10000;")
                     conn.execute("PRAGMA synchronous=NORMAL;")
                 except sqlite3.Error:
                     pass
-                # Liveness probe: raises immediately on a corrupt file, so mid-run
-                # corruption self-heals on the next connection instead of failing
-                # every write for the rest of the run (Nov-12 Kaggle behavior:
-                # 949 ERROR / 122 CRITICAL from one corrupt vehicle.db).
+                # Liveness probe: file header magic + schema read + quick_check
+                # (rate-limited to once per 30s per process -- quick_check is a
+                # full scan and must not run on every write batch). Catches a
+                # corrupt file at CONNECT time so mid-run corruption self-heals
+                # here instead of failing every write for the rest of the run
+                # (Nov-12/Nov-14 Kaggle behavior: hundreds of ERROR lines from
+                # one corrupt vehicle.db).
                 try:
                     self._raise_if_db_file_corrupt(path)
                     conn.execute("SELECT name FROM sqlite_master LIMIT 1;").fetchone()
+                    now = time.time()
+                    if now - self._last_quick_check > 30.0:
+                        qc = conn.execute("PRAGMA quick_check(1);").fetchone()
+                        self._last_quick_check = now
+                        if qc is not None and qc[0] != "ok":
+                            raise sqlite3.DatabaseError(f"malformed (quick_check: {qc[0]})")
                 except sqlite3.DatabaseError as e:
                     if conn is not None:
                         conn.close()
                         conn = None
-                    if _is_corruption_error(e):
+                    is_disk_io = (
+                        isinstance(e, sqlite3.OperationalError)
+                        and "disk i/o" in str(e).lower()
+                    )
+                    if _is_corruption_error(e) or (is_disk_io and self._journal_forced):
+                        # Corrupt file -- or the mount still fails the probe
+                        # AFTER the WAL->DELETE flip, i.e. the file is not
+                        # usable on this mount. Quarantine and recreate once;
+                        # re-enqueued writer items then succeed on the fresh DB
+                        # instead of failing forever.
                         logger.error(
                             f"SQLite DB {self.sqlite_db_path} failed liveness probe ({e}); "
                             "quarantining and recreating a fresh database."
                         )
-                        if self._recover_corrupt_db():
-                            conn = sqlite3.connect(str(self.sqlite_db_path), timeout=10.0)
-                            conn.row_factory = sqlite3.Row
-                            try:
-                                conn.execute("PRAGMA journal_mode=DELETE;")
-                                conn.execute("PRAGMA synchronous=NORMAL;")
-                            except sqlite3.Error:
-                                pass
-                        else:
+                        conn = self._recover_corrupt_db_and_connect()
+                        if conn is None:
                             raise DatabaseError(f"DB corrupt and recovery failed: {e}") from e
-                    elif (
-                        isinstance(e, sqlite3.OperationalError)
-                        and "disk i/o" in str(e).lower()
-                        and not getattr(self, "_journal_forced", False)
+                        return conn
+                    if (
+                        is_disk_io
+                        and not self._journal_forced
                         and self._force_rollback_journal(path)
                     ):
                         # mount can't serve the WAL -shm: header flipped to
                         # rollback-journal, sidecars removed -- retry now
                         self._journal_forced = True
+                        self._journal_mode = "delete"
                         continue
-                    elif isinstance(e, sqlite3.OperationalError) and attempt < 2:
+                    if attempt < 2:
                         time.sleep(0.25 * (attempt + 1))
                         continue
-                    else:
-                        raise
+                    raise
                 return conn
             except sqlite3.OperationalError:
                 # transient (disk I/O on the mount / locked): retry, and on
@@ -656,6 +749,11 @@ class DatabaseManager:
             return
         try:
             self._quarantine_corrupt_db()
+            # Decide the journal mode at boot under the schema lock, before any
+            # worker process opens the file: on mounts that can't serve the
+            # WAL -shm (Kaggle /kaggle/working) the header is flipped to DELETE
+            # here, so no later process ever attempts WAL on the broken mount.
+            self._detect_journal_mode(Path(self.sqlite_db_path))
             logger.info(f"Initializing SQLite DB schema at {self.sqlite_db_path}...")
             try:
                 with self._get_sqlite_connection() as conn:
@@ -1551,6 +1649,42 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error saving ReID identity {global_id}: {e}")
             return False
+
+    def prune_reid_identities(self, keep: int = 5000, max_age_seconds: float = 14400.0) -> int:
+        """Prune the reid_identities table to the gallery bound.
+
+        Deletes rows older than max_age_seconds, then caps the table to the
+        `keep` most-recently-seen rows so the DB mirrors the in-memory
+        gallery's TTL + max_gallery_size eviction instead of growing
+        unbounded (reads already LIMIT, but the table itself never shrank).
+        SQLite path only -- reid_identities is created/read/written solely
+        via _get_sqlite_connection in this codebase.
+        """
+        now = time.time()
+        try:
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "DELETE FROM reid_identities WHERE last_seen < ?",
+                        (now - float(max_age_seconds),),
+                    )
+                    deleted = cursor.rowcount or 0
+                    cursor.execute(
+                        "DELETE FROM reid_identities WHERE global_id NOT IN "
+                        "(SELECT global_id FROM reid_identities ORDER BY last_seen DESC LIMIT ?)",
+                        (int(keep),),
+                    )
+                    deleted += cursor.rowcount or 0
+                    conn.commit()
+            if deleted:
+                logger.info(
+                    f"Pruned {deleted} reid_identities rows (keep={keep}, max_age_seconds={max_age_seconds})."
+                )
+            return deleted
+        except Exception as e:
+            logger.error(f"Error pruning reid_identities: {e}")
+            return 0
 
     def get_recent_reid_identities(self, limit: int = 1000) -> List[Dict]:
         """Retrieves recent ReID identities for warm start."""

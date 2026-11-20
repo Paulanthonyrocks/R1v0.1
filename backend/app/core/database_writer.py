@@ -15,6 +15,10 @@ logger = logging.getLogger("app.core.database_writer")
 _MAX_CONSECUTIVE_FAILURES = 50
 # Maximum items to re-enqueue per failure (prevents queue oscillation)
 _MAX_REENQUEUE = 500
+# Maximum write attempts per queue item before it is permanently dropped.
+# A permanently broken DB must not turn into an infinite re-enqueue loop
+# (constant ERROR log spam + unbounded queue growth).
+_MAX_ITEM_ATTEMPTS = 5
 # Drain timeout in seconds during graceful shutdown
 _DRAIN_TIMEOUT = 5.0
 # Minimum batch accumulation window (seconds) for write amplification reduction
@@ -244,7 +248,37 @@ def database_writer_process(
                     if saved_reid:
                         logger.debug(f"Saved {saved_reid} ReID identities to DB.")
 
+                # Gallery-bound prune of the reid_identities table, dispatched
+                # by GlobalReIDManager._cleanup through this queue so only
+                # this single writer touches SQLite.
+                prune_batch = [it for it in valid_items if it["type"] == "prune_reid_identities"]
+                for it in prune_batch:
+                    try:
+                        db_manager.prune_reid_identities(**it.get("data", {}))
+                    except Exception as e:
+                        logger.error(f"Failed to prune reid_identities: {e}")
+                        failed_items.append(it)
+
                 if failed_items:
+                    # Bound per-item retries: with a permanently broken DB,
+                    # unbounded re-enqueue turns every failure into log spam
+                    # and unbounded queue growth. Items that exhausted their
+                    # attempts are dropped here.
+                    bounded = []
+                    attempts_dropped = 0
+                    for item in failed_items:
+                        if isinstance(item, dict):
+                            item["_attempts"] = item.get("_attempts", 0) + 1
+                            if item["_attempts"] >= _MAX_ITEM_ATTEMPTS:
+                                attempts_dropped += 1
+                                continue
+                        bounded.append(item)
+                    if attempts_dropped:
+                        logger.warning(
+                            f"Dropping {attempts_dropped} items after {_MAX_ITEM_ATTEMPTS} "
+                            "failed write attempts each (DB not recovering)."
+                        )
+                    failed_items = bounded
                     dropped_count = len(failed_items) - _MAX_REENQUEUE
                     if dropped_count > 0:
                         logger.warning(f"Failure batch size ({len(failed_items)}) exceeds _MAX_REENQUEUE. Permanently dropping {dropped_count} items.")
@@ -310,6 +344,8 @@ def database_writer_process(
                                 db_manager.save_feed_metrics_batch([item["data"]])
                         elif msg_type == "reid_identity":
                             db_manager.save_reid_identity(**item["data"])
+                        elif msg_type == "prune_reid_identities":
+                            db_manager.prune_reid_identities(**item.get("data", {}))
                         drained += 1
                     except Exception as e:
                         logger.critical(f"Critical data loss during drain for {msg_type}: {e}. Item: {item!r}")

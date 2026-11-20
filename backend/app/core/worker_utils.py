@@ -36,6 +36,11 @@ class WorkerMetrics:
         self.drops_shm_recycled = 0
         self.drops_output_full = 0
         self.drops_other = 0
+        # frames_skipped counts frames forwarded as passthrough WITHOUT
+        # inference by the scene-motion adaptive skip (inference.motion_skip)
+        # or the cadence skip. It is NOT a drop: frames_dropped stays the
+        # load-shedding counter, frames_skipped the deliberate-skip counter.
+        self.frames_skipped = 0
         self.errors = 0
         self.shm_leaks = 0
         self.start_time = time.monotonic()
@@ -65,6 +70,7 @@ class WorkerMetrics:
             "feed_id": self.feed_id,
             "frames_processed": self.frames_processed,
             "frames_dropped": self.frames_dropped,
+            "frames_skipped": self.frames_skipped,
             "drops_shm_recycled": self.drops_shm_recycled,
             "drops_output_full": self.drops_output_full,
             "drops_other": self.drops_other,
@@ -158,6 +164,11 @@ def serialize_tracked_vehicles(
                 "confidence": make_serializable(data.get("confidence", 0.0)),
                 "is_wrong_way": bool(data.get("is_wrong_way", False)),
                 "is_stopped": bool(data.get("is_stopped", False)),
+                # Perception-quality batch: occlusion flag (frontend type
+                # VehicleFrontendData already declares is_occluded) and the
+                # 0..1 track quality score.
+                "is_occluded": bool(data.get("occluded", False)),
+                "quality": make_serializable(data.get("quality", 1.0)),
                 "lane": int(data.get("lane", -1)),
                 "status": str(data.get("status", "unknown")),
                 "vx": make_serializable(data.get("vx", 0.0)),

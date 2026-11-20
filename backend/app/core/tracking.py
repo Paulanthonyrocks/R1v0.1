@@ -9,6 +9,18 @@ from scipy.optimize import linear_sum_assignment
 
 logger = logging.getLogger("app.ml.tracking")
 
+# Perception-quality helpers (pure stdlib). Guarded like core_module's
+# optional imports: if the import fails the tracker still works, just
+# without quality/occlusion fields.
+try:
+    from ..utils.track_quality import (
+        update_track_quality,
+        note_track_miss,
+        compute_occlusion_flags,
+    )
+except Exception:  # pragma: no cover - standalone/test import context
+    update_track_quality = note_track_miss = compute_occlusion_flags = None
+
 # No global counter - using UUIDs for guaranteed uniqueness across workers/restarts
 
 class TrackingManager:
@@ -59,6 +71,19 @@ class TrackingManager:
         # per-frame O(tracks) work unbounded. Same key, same default, so both
         # layers enforce the operator's declared cap.
         self.max_active_tracks = int(vd_cfg.get("max_active_tracks", 50))
+
+        # Per-track quality score + occlusion flags (perception-quality
+        # batch). quality.enabled gates the score; occlusion_enabled gates
+        # the pairwise cover pass at the end of update().
+        q_cfg = tracking_cfg.get("quality", {}) or {}
+        self.quality_enabled = bool(q_cfg.get("enabled", True))
+        self.q_conf_weight = float(q_cfg.get("conf_weight", 0.6))
+        self.q_hit_weight = float(q_cfg.get("hit_weight", 0.4))
+        self.q_ema_alpha = float(q_cfg.get("ema_alpha", 0.3))
+        self.q_miss_decay = float(q_cfg.get("miss_decay", 0.95))
+        self.occlusion_enabled = bool(q_cfg.get("occlusion_enabled", True))
+        self.occlusion_cover_ratio = float(q_cfg.get("occlusion_cover_ratio", 0.6))
+
 
         # Log the effective association/tracking tunables once at tracker init.
         # These are the knobs that gate moving-car association (proximity *
@@ -246,6 +271,8 @@ class TrackingManager:
                             # over multiple lost/regained cycles.
                             kf.P[4, 4] = 1000.0
                             kf.P[5, 5] = 1000.0
+                    if self.quality_enabled and note_track_miss is not None:
+                        note_track_miss(track, miss_decay=self.q_miss_decay)
                     
                     if "predicted_bbox" in track:
                         track["bbox"] = track["predicted_bbox"]
@@ -316,6 +343,16 @@ class TrackingManager:
                     except Exception:
                         pass
             self.vehicle_data = culled
+
+        # Occlusion pass over the surviving pool: mark tracks whose bbox is
+        # mostly covered by a more confident track. O(n^2) but n is capped by
+        # max_active_tracks. Runs on the final pool so culled tracks don't
+        # flag their survivors.
+        if self.occlusion_enabled and compute_occlusion_flags is not None and self.vehicle_data:
+            try:
+                compute_occlusion_flags(self.vehicle_data, cover_ratio=self.occlusion_cover_ratio)
+            except Exception as e:
+                logger.debug(f"[{self.feed_id}] occlusion pass failed: {e}")
         return self.vehicle_data
 
     @staticmethod
@@ -450,6 +487,12 @@ class TrackingManager:
         track["class_id"] = cls
         track["frames_since_seen"] = 0
         track["age"] = track.get("age", 0) + 1
+        if self.quality_enabled and update_track_quality is not None:
+            update_track_quality(
+                track, conf,
+                conf_weight=self.q_conf_weight, hit_weight=self.q_hit_weight,
+                ema_alpha=self.q_ema_alpha, probation_threshold=self.probation_threshold,
+            )
         if emb is not None:
             track["embedding"] = emb
         track["centroid"] = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
@@ -474,7 +517,7 @@ class TrackingManager:
         bbox, cls, conf, emb = det
         # Simplified ID: feed_id + 16-char hex suffix to prevent collisions
         vid = f"{self.feed_id}_{uuid.uuid4().hex[:16]}"
-        return {
+        track = {
             "vehicle_id": vid,
             "bbox": bbox,
             "predicted_bbox": bbox,
@@ -487,6 +530,14 @@ class TrackingManager:
             "hits": 1,
             "prev_status": "unknown",
             "age": 1,
+            "occluded": False,
             "kalman_filter": self._init_kalman((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, bbox[2]-bbox[0], bbox[3]-bbox[1]),
             "embedding": emb,
         }
+        if self.quality_enabled and update_track_quality is not None:
+            update_track_quality(
+                track, conf,
+                conf_weight=self.q_conf_weight, hit_weight=self.q_hit_weight,
+                ema_alpha=self.q_ema_alpha, probation_threshold=self.probation_threshold,
+            )
+        return track
