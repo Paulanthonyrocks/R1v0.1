@@ -664,14 +664,18 @@ performance:
   # Reduced from 8 to 4 (2 per GPU) to eliminate CUDA context thrashing
   # from 12 concurrent CUDA inits. With SLOT_COUNT=6 and 2 GPUs, 4 workers
   # = 1:1 worker:slot affinity. Each GPU runs 2 workers pinned to it.
-  # Dropped 4 -> 3 (Sep-10): at 3 feeds (slots 0..2) the 4th worker loaded
-  # TRT engine + ReID embedder, held ~1GB VRAM + a core, and processed ZERO
-  # frames across the full 68-min run -- pure idle standby cost. 3 workers
-  # = 1:1 with current feeds; W0+W2 -> GPU0, W1 -> GPU1. Raise back to 4
-  # BEFORE adding a 4th feed (the routing `(wid + sub*pool_size) % 6` needs
-  # pool_size >= feed count for strict 1:1; overflow then fans out via the
-  # Redis consumer group, which is slower to warm).
-  inference_pool_size: 3
+  # Dropped 3 -> 2 (Nov-24): on 2 T4s, 3 pinned workers split 2:1 (pin is
+  # wid % num_gpus, so W0+W2 land on GPU0) and the two CUDA contexts on GPU0
+  # thrash -- the Nov-24 run logged reid_assoc 37-54 ms/frame on GPU0's feeds
+  # vs 25-38 ms on GPU1's lone worker, and the SHM decode-shed latch fired
+  # from 19:08:55 onward. 2 workers = exactly one process per GPU; the 3rd
+  # feed co-locates onto W0's second slot (routing base_wid = seq %
+  # pool_size, slot = (wid + sub*pool_size) % 6 -> slot 2, owned by W0) so
+  # its frames BATCH with feed 0's in the worker's multi-slot loop instead
+  # of running a second CUDA context. Raise to 3+ only if a 4th feed is
+  # added (strict 1:1 needs pool_size >= feed count) or per-feed fps on the
+  # shared worker collapses in a live run.
+  inference_pool_size: 2
   # Pin the autoscaler: when true, the scaling monitor never scales the
   # inference pool up OR down (see feed_manager._scaling_monitor_loop). Each
   # scale action respawns a worker that reloads YOLO+ReID onto the GPU; under
@@ -1001,6 +1005,12 @@ storage:
   report_output_dir: data/pavement_reports
 tracking:
   use_appearance_in_tracking: true
+  # Appearance-association cadence: ReID embeddings (detection crops AND
+  # track-gallery updates in core_module.detect_and_track) are computed only
+  # every Nth frame; off-frames associate on motion only (emb=None path).
+  # 1 = legacy every-frame. Nov-24 run: reid_assoc alone was 25-54 ms of the
+  # 67-92 ms track_post, so stride 2 roughly halves the per-frame GPU cost.
+  reid_assoc_frame_stride: 2
   dynamic_matching_threshold: 0.85
   low_conf_association_threshold: 0.3
   giou_threshold: -0.2

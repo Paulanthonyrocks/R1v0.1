@@ -772,9 +772,17 @@ class CoreModule:
         # embeddings were only computed after update(), leaving det embeddings
         # None and making the tracker's ReID branch dead code (audit T1). Gated
         # by config flag and a per-frame budget to bound GPU cost.
+        _track_cfg = self.config.get("tracking", {})
+        # Appearance-association cadence (Nov-24): embedding every detection
+        # every frame made reid_assoc 25-54 ms of track_post's 67-92 ms on the
+        # 2xT4 box. On stride-off frames dets reach the tracker with emb=None
+        # and association falls back to motion (IoU/velocity gates) -- the
+        # same path as use_appearance_in_tracking: false.
+        _assoc_stride = int(_track_cfg.get("reid_assoc_frame_stride", 1) or 1)
         use_reid_assoc = (
             self.reid_embedder is not None
-            and self.config.get("tracking", {}).get("use_appearance_in_tracking", True)
+            and _track_cfg.get("use_appearance_in_tracking", True)
+            and (_assoc_stride <= 1 or frame_index % _assoc_stride == 0)
         )
         dets_for_tracker = []
         if use_reid_assoc and detections:
@@ -854,7 +862,7 @@ class CoreModule:
         # Apply previous statuses for adaptive ReID
         for tid, track in vehicle_data.items():
             track["prev_status"] = current_statuses.get(tid, "unknown")
-        if self.reid_embedder:
+        if self.reid_embedder and (_assoc_stride <= 1 or frame_index % _assoc_stride == 0):
             needs_emb = []
             h, w = frame.shape[:2]
             self._reid_updates_this_frame = 0
