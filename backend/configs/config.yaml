@@ -120,7 +120,10 @@ firebase_admin:
 # Legacy top-level fps (kept for backward compatibility). Must match
 # video_output.fps and video_processing.target_fps.
 # Reduced from 8 to 5 to match sustainable inference throughput (~2-5 fps/worker).
-fps: 5
+# STRESS RUN (temporary): raised 5 -> 15 (native sample-video fps, i.e. no
+# throttle) to find the real ingest ceiling and exercise the drop split +
+# global_skip_factor backlog valve. Revert all three fps keys to 5 after.
+fps: 15
 incident_detection:
   congestion_speed_threshold: 20
   density_threshold: 10
@@ -1253,7 +1256,9 @@ video_output:
   # (15 vs 8) which silently capped effective throughput at the lower of the two.
   # Reduced from 15 to 8 to match sustainable ingestion/inference throughput.
   # Reduced from 8 to 5 to match sustainable inference throughput (~2-5 fps/worker).
-  fps: 5
+  # STRESS RUN (temporary): 5 -> 15 = native fps, removes the ingest throttle.
+  # Watch METRICS drop split + SHM-STATS free fraction; revert to 5 after.
+  fps: 15
   frame_resolution:
   - 640
   - 480
@@ -1273,7 +1278,8 @@ video_processing:
   # latency regresses, drop back to 8.
   # Reduced from 15 to 8 to match sustainable ingestion/inference throughput.
   # Reduced from 8 to 5 to match sustainable inference throughput (~2-5 fps/worker).
-  target_fps: 5
+  # STRESS RUN (temporary): 5 -> 15 to match target_fps; revert to 5 after.
+  target_fps: 15
   # Adaptive streaming: when TRUE the pipeline ships TWO JPEGs per frame
   # (full-res and a downscaled "small" tier) and lets the broadcaster pick by
   # client RTT. This is a bandwidth-conservation optimization for mixed
