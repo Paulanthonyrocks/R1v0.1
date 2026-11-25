@@ -241,56 +241,33 @@ class InferencePoolManager:
             del self._slot_to_worker[slot]
 
         effective_workers = min(target_size, self.slot_count)
-        survivors = list(self._inference_pool.keys())
+        desired = [w for w in range(effective_workers) if w not in self._quarantined_workers]
 
-        # 2. Reassign orphaned slots round-robin across survivors, using the
-        #    SAME fan-out formula as spawn_worker
-        #    (slot % effective_workers == wid % effective_workers) so the
-        #    mapping stays consistent with what spawn_worker assigns to any
-        #    newly-spawned worker.
-        for slot in range(self.slot_count):
-            if slot in self._slot_to_worker:
-                continue  # still owned by a survivor
-            if not survivors:
-                continue
-            owner = (slot % effective_workers) % len(survivors)
-            self._slot_to_worker[slot] = survivors[owner]
+        # 2. Recompute the WHOLE slot->worker map so EVERY slot has an owner.
+        #    The old survivor-based pass skipped reassignment at boot (pool
+        #    empty -> no survivors) and step 3 claimed only ONE slot per new
+        #    worker, so slots pool_size..slot_count-1 stayed orphaned forever.
+        #    A feed routed to an orphaned slot has NO consumer: its SHM
+        #    segments are never released, the free pool drains to the shed
+        #    floor and healthy feeds start dropping (2026-11-25 run: pool=2,
+        #    slot 2 orphaned, Feed_3 never reached inference, 969 "SHM shed"
+        #    warnings, hard-reclaimer masking the dead checkouts). Round-robin
+        #    over the final worker set matches the feed-routing formula
+        #    (worker w owns slots w, w+pool_size, w+2*pool_size, ...).
+        if desired:
+            self._slot_to_worker = {
+                slot: desired[slot % len(desired)] for slot in range(self.slot_count)
+            }
 
         # 3. Spawn new workers on scale-up. spawn_worker reads slots fresh
-        #    from _slot_to_worker, so new workers get correct ownership.
-        #
-        #    CRITICAL: when target_size > slot_count (oversubscribed pool),
-        #    we CANNOT give every new wid a distinct slot. Previously the
-        #    loop assigned slot s to wid N if (s % effective_workers ==
-        #    N % effective_workers), which OVERWROTE a survivor's slot
-        #    claim mid-iteration. Survivors whose slot got stolen ended
-        #    up with empty sets; step 4 detected the change and tried
-        #    to respawn them, but patch 1 (orphan gate) refused because
-        #    their new set was empty -- leaving the worker dead.
-        #
-        #    Fix: prefer an UNOWNED slot for the new worker. Only fall
-        #    back to the modulo formula if every slot is already taken.
-        #    This preserves the invariant "every alive worker owns at
-        #    least one slot" regardless of pool_size vs slot_count.
+        #    from _slot_to_worker, so each new worker picks up its full slot
+        #    set from the recompute above -- no per-spawn claiming here (the
+        #    old modulo fallback could steal a survivor's slot claim mid-loop
+        #    and force a respawn). Workers beyond slot_count (oversubscribed
+        #    pool) find no slots and are refused by spawn_worker's orphan
+        #    gate, same as before.
         for wid in range(target_size):
-            if wid not in self._inference_pool:
-                claimed = False
-                # First pass: any unowned slot works
-                for slot in range(self.slot_count):
-                    if slot not in self._slot_to_worker:
-                        self._slot_to_worker[slot] = wid
-                        claimed = True
-                        break
-                # Second pass: fall back to the modulo formula (oversubscribed)
-                if not claimed:
-                    for slot in range(self.slot_count):
-                        if self._slot_to_worker.get(slot, -1) == wid:
-                            claimed = True
-                            break
-                        if (slot % effective_workers) == (wid % effective_workers):
-                            self._slot_to_worker[slot] = wid
-                            claimed = True
-                            break
+            if wid not in self._inference_pool and wid not in self._quarantined_workers:
                 self.spawn_worker(wid)
 
         # 4. Respawn surviving workers whose slot set CHANGED so they actually

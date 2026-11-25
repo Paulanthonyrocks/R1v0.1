@@ -675,6 +675,14 @@ performance:
   # of running a second CUDA context. Raise to 3+ only if a 4th feed is
   # added (strict 1:1 needs pool_size >= feed count) or per-feed fps on the
   # shared worker collapses in a live run.
+  # 2026-11-25 correction: that co-location NEVER actually happened --
+  # scale_pool left slots >= pool_size orphaned at boot (slots 2-5 had no
+  # owner), so Feed_3's slot-2 queue had NO consumer, its SHM segments were
+  # never released, and the pool drained into the decode-shed storm
+  # (969 "SHM shed" warnings, ~90% frames dropped). Fixed in
+  # inference_pool_manager.scale_pool: the full slot map is recomputed on
+  # every scale, so with pool=2 W0 really owns slots [0,2,4] and the 3rd
+  # feed batches there as intended.
   inference_pool_size: 2
   # Pin the autoscaler: when true, the scaling monitor never scales the
   # inference pool up OR down (see feed_manager._scaling_monitor_loop). Each

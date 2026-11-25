@@ -1731,11 +1731,25 @@ class FeedManager:
                 slot_id = cand_slot
                 break
             if slot_id is None:
-                # Every worker/slot is quarantined -- fall back to the base
-                # worker so the feed still starts (and fails visibly) instead
-                # of silently never launching.
-                wid = base_wid
-                slot_id = (wid + self._per_worker_feed_count.get(wid, 0) * pool_size) % self.slot_count
+                # No candidate slot had a live owner. NEVER fall back to an
+                # unowned slot: an unconsumed slot queue means the feed's SHM
+                # segments are never released and the whole pool drains into
+                # the decode-shed storm (2026-11-25 run: pool=2, slot 2 had no
+                # owner, Feed_3's segments were only freed by the
+                # hard-reclaimer). Route to any slot that actually has a live
+                # consumer; only if none exists keep the old base-worker
+                # formula so the feed still starts (and fails visibly)
+                # instead of silently never launching.
+                live_slots = [
+                    s for s, owner in self.pool_manager.slot_to_worker.items()
+                    if owner not in quarantined
+                ]
+                if live_slots:
+                    slot_id = min(live_slots)
+                    wid = self.pool_manager.slot_to_worker[slot_id]
+                else:
+                    wid = base_wid
+                    slot_id = (wid + self._per_worker_feed_count.get(wid, 0) * pool_size) % self.slot_count
             sub = self._per_worker_feed_count.get(wid, 0)
             # Worker `wid` owns slots { wid, wid + pool_size, wid + 2*pool_size, ... }.
             self._per_worker_feed_count[wid] = sub + 1
