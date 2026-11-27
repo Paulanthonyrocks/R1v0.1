@@ -726,8 +726,9 @@ performance:
   skip_factor_adjustment_interval: 360.0
   skip_factor_decrease_step: 0.05
   skip_factor_increase_step: 0.1
-  use_shared_memory: true
-  use_shm: true
+  # use_shared_memory / use_shm were removed (Nov-26): grep-verified zero
+  # readers in backend/ -- SHM use is governed by shm_pool_size below, and the
+  # PerformanceConfig pydantic defaults (both True) preserve behavior.
   # Dropped 6000 -> 4000 (Sep-10): steady-state acq was ~3030 with free pinned
   # at 49.5% all run -- half the pool was standing headroom. 4000 frees ~3GB
   # of tmpfs RAM (6000x1.5MB=9GB -> 6GB). EDGE CONDITION: the decode-shed
@@ -1019,6 +1020,11 @@ tracking:
   # 1 = legacy every-frame. Nov-24 run: reid_assoc alone was 25-54 ms of the
   # 67-92 ms track_post, so stride 2 roughly halves the per-frame GPU cost.
   reid_assoc_frame_stride: 2
+  # Gallery-refresh cadence for post-tracker ReID embeddings in
+  # detect_and_track -- INDEPENDENT of reid_assoc_frame_stride (which only
+  # gates pre-tracker association embeddings). 2 preserves the coupled-era
+  # cadence; the per-frame reid_budget_per_frame cap bounds GPU cost anyway.
+  reid_gallery_frame_stride: 2
   dynamic_matching_threshold: 0.85
   low_conf_association_threshold: 0.3
   giou_threshold: -0.2

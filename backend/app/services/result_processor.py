@@ -233,9 +233,10 @@ class ResultProcessor:
         Wire the in-process subscriber pump.
 
         The callable is FeedManager.deliver_to_subscribers; it is invoked
-        once per deduped decoded frame so internal consumers (e.g. the
-        recording VideoProcessor) receive the same payloads as WebSocket
-        clients. Passing None disables the pump.
+        once per processed frame (via _route_safety_and_analytics, outside the
+        display-FPS dedup gate) so internal consumers (e.g. the recording
+        VideoProcessor) see every frame, not just the display-latest one.
+        Passing None disables the pump.
         """
         self._subscriber_pump = pump_callable
         logger.info("ResultProcessor subscriber pump updated.")
@@ -346,17 +347,22 @@ class ResultProcessor:
                         if isinstance(res, tuple) and len(res) == 2:
                             msg_id, item = res
                             items_buffer.append((msg_id, item))
-                        # ACK immediately to prevent re-delivery storm.
-                        # DESIGN TRADE-OFF: We ACK before SHM read because in a real-time video pipeline,
-                        # a failed SHM read means the frame is already stale. It is better to drop 
-                        # the frame and move to the next one than to let Redis redeliver it, 
-                        # which would introduce latency and potentially cause a backlog.
-                        if msg_id:
-                            try:
-                                self._central_output_queue.ack(msg_id)
-                            except Exception as e:
-                                logger.error(f"Failed to ack message {msg_id}: {e}")
+                            # ACK immediately to prevent re-delivery storm.
+                            # DESIGN TRADE-OFF: We ACK before SHM read because in a real-time video pipeline,
+                            # a failed SHM read means the frame is already stale. It is better to drop
+                            # the frame and move to the next one than to let Redis redeliver it,
+                            # which would introduce latency and potentially cause a backlog.
+                            if msg_id:
+                                try:
+                                    self._central_output_queue.ack(msg_id)
+                                except Exception as e:
+                                    logger.error(f"Failed to ack message {msg_id}: {e}")
                         else:
+                            # Not a (msg_id, item) pair: no id to ack, but keep the
+                            # item. (Previously this read a stale msg_id from the
+                            # previous iteration -- double-acking it and dropping
+                            # the item -- or raised UnboundLocalError on the first
+                            # iteration, losing the whole batch to the outer except.)
                             items_buffer.append((None, res))
                 except queue.Empty:
                     pass
@@ -366,14 +372,34 @@ class ResultProcessor:
                     await handle_periodic_tasks_callback()
                     continue
 
-                processed_items = await asyncio.gather(*[
-                    asyncio.get_running_loop().run_in_executor(
-                        self._executor,
-                        self._process_single_result,
-                        item,
-                    )
-                    for msg_id, item in items_buffer
-                ])
+                # With adaptive_streaming off, _process_single_result is a pure
+                # unpack -- run it inline and skip the executor round-trip per
+                # item (the gather below only pays off when it re-encodes a
+                # downscaled bg JPEG per frame).
+                if self.config.get("video_processing", {}).get("adaptive_streaming", False):
+                    processed_items = await asyncio.gather(*[
+                        asyncio.get_running_loop().run_in_executor(
+                            self._executor,
+                            self._process_single_result,
+                            item,
+                        )
+                        for msg_id, item in items_buffer
+                    ])
+                else:
+                    processed_items = [self._process_single_result(item) for _, item in items_buffer]
+
+                # Safety/analytics/recording must see EVERY processed frame, not
+                # just the display-latest one (C2/C3): display dedup below gates
+                # only the WebSocket broadcast; metrics-to-DB, the safety/
+                # incident hook, and the recording pump run per frame so display
+                # throttling can never drop an anomaly or a recorded frame
+                # (inference_worker cooldown-gates anomaly emission, so this is
+                # cheap in steady state).
+                for result in processed_items:
+                    if result is None:
+                        continue
+                    _fid, _fidx, _fb, _m, _v, _ex = result
+                    await self._route_safety_and_analytics(_fid, _fidx, _fb, _m, _v, _ex)
 
                 # Dedup logic
                 latest_per_feed: Dict[str, int] = {}
@@ -440,6 +466,54 @@ class ResultProcessor:
             except Exception as e:
                 logger.error(f"Error in result processor loop: {e}", exc_info=True)
                 await asyncio.sleep(1.0)
+
+    async def _route_safety_and_analytics(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra):
+        """DB metrics queue + safety/incident hook + recording pump for ONE
+        processed frame.
+
+        Runs for every frame, independent of display-FPS dedup (C2/C3): the
+        WebSocket broadcast may drop frames, safety events, DB metrics and
+        recording may not. (Formerly the hook and pump lived inline in
+        _process_frame_data, which the dedup gate could skip entirely.)
+        """
+        # Forward to analytics worker for DB persistence of feed_metrics
+        if self._analytics_input_queue and metrics:
+            try:
+                # Format expected by analytics_worker: (feed_id, frame_idx, timestamp, vehicles, lanes, lines, feed_metrics, extra)
+                lanes = extra.get("ln", {}).get("lines", []) if extra else []
+                bounds = extra.get("ln", {}).get("bounds", []) if extra else []
+                self._analytics_input_queue.put_nowait((
+                    feed_id,
+                    frame_idx,
+                    time.time(),
+                    vehicles,
+                    lanes,
+                    bounds,
+                    metrics,
+                    extra or {}
+                ))
+            except Exception as e:
+                logger.debug(f"Analytics input queue full, dropping frame for {feed_id}: {e}")
+        # Route into analytics (SafetyMonitor, incidents, metric history).
+        if self._analytics_hook is not None:
+            try:
+                await self._analytics_hook(feed_id, metrics, vehicles)
+            except Exception as e:
+                logger.debug(f"Analytics hook error for {feed_id}: {e}")
+        # Pump a copy into in-process subscribers (recording, etc.). Per frame,
+        # NOT display-gated: a recording must not lose frames the WebSocket
+        # legitimately drops. Opt-in no-op when nothing has subscribed.
+        if self._subscriber_pump is not None and frame_bytes:
+            try:
+                await self._subscriber_pump(
+                    feed_id=feed_id,
+                    frame_idx=frame_idx,
+                    frame_bytes=frame_bytes,
+                    metrics=metrics,
+                    vehicles=vehicles,
+                )
+            except Exception as e:
+                logger.debug(f"Subscriber pump error for {feed_id}: {e}")
 
     async def _process_frame_data(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra):
         """
@@ -546,25 +620,6 @@ class ResultProcessor:
                     except Exception as e:
                         logger.debug(f"[RESULT_PROC] status re-broadcast failed for {feed_id}: {e}")
 
-            # 2. Forward to analytics worker for DB persistence of feed_metrics
-            if self._analytics_input_queue and metrics:
-                try:
-                    # Format expected by analytics_worker: (feed_id, frame_idx, timestamp, vehicles, lanes, lines, feed_metrics, extra)
-                    lanes = extra.get("ln", {}).get("lines", []) if extra else []
-                    bounds = extra.get("ln", {}).get("bounds", []) if extra else []
-                    self._analytics_input_queue.put_nowait((
-                        feed_id,
-                        frame_idx,
-                        time.time(),
-                        vehicles,
-                        lanes,
-                        bounds,
-                        metrics,
-                        extra or {}
-                    ))
-                except Exception as e:
-                    logger.debug(f"Analytics input queue full, dropping frame for {feed_id}: {e}")
-
             # 3. Serialize as Msgpack to match frontend expectations
             # Compact keys: t=type, f=feed_id, i=frame_index, ts=timestamp, v=vehicles, m=metrics, bg=background
             # When adaptive streaming is on, ``extra`` carries a downscaled ``bg``
@@ -592,7 +647,10 @@ class ResultProcessor:
                 "t": WebSocketMessageTypeEnum.VIDEO_FRAME.value,
                 "f": feed_id,
                 "i": frame_idx,
-                "ts": time.time() * 1000,
+                # Propagate the frame's capture timestamp (injected by the
+                # inference worker into extra["ts"]) so the frontend sees
+                # end-to-end latency; fall back to broadcast wall-clock.
+                "ts": ((extra.get("ts") if isinstance(extra, dict) else None) or time.time()) * 1000,
                 "v": _wire_vehicles(vehicles, geo_H),
                 "m": _convert_metrics(metrics),
                 "bg": frame_bytes,  # full-res; recording pump also uses this
@@ -636,29 +694,9 @@ class ResultProcessor:
             else:
                 logger.warning(f"[RESULT_PROC] Broadcaster is None; cannot broadcast frame for {feed_id}")
 
-            # 4. Pump a copy into in-process subscribers (recording, etc.).
-            # Opt-in: only runs when something has subscribed. Cheap no-op
-            # when the subscriber map is empty (common case).
-            if self._subscriber_pump is not None and frame_bytes:
-                try:
-                    await self._subscriber_pump(
-                        feed_id=feed_id,
-                        frame_idx=frame_idx,
-                        frame_bytes=frame_bytes,
-                        metrics=metrics,
-                        vehicles=vehicles,
-                    )
-                except Exception as e:
-                    logger.debug(f"Subscriber pump error for {feed_id}: {e}")
-
-            # 5. Route into analytics (SafetyMonitor, incidents, metric history).
-            # This is the bridge that was previously missing: without it the
-            # entire safety/incident/history path was dead code (audit C1).
-            if self._analytics_hook is not None:
-                try:
-                    await self._analytics_hook(feed_id, metrics, vehicles)
-                except Exception as e:
-                    logger.debug(f"Analytics hook error for {feed_id}: {e}")
+            # 4. Subscriber pump (recording) moved to _route_safety_and_analytics
+            # so it runs per processed frame, outside the display-FPS dedup gate
+            # above (C2/C3: display throttling must not drop recording frames).
 
         except Exception as e:
             logger.error(f"Error broadcasting frame data for {feed_id}: {e}", exc_info=True)

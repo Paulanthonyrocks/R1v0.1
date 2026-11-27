@@ -194,12 +194,19 @@ def _plate_boxes_for_sidecar(core, frame_dims) -> list:
     if not data:
         return []
 
+    # Live tracks only: lost/stale-status entries must not contribute blur
+    # boxes (their bboxes no longer match the snapshot). Over-inclusion errs
+    # toward masking more, the safe direction for privacy.
+    live_statuses = {"active", "predicting"}
     # Only motor vehicles carry readable plates; pedestrians must not be
     # blurred as "plate" regions, and person boxes are handled separately.
     vehicle_classes = {2, 3, 5, 7}  # COCO: car, motorcycle, bus, truck
     out = []
     for _tid, trk in data.items():
         try:
+            _st = trk.get("status")
+            if _st is not None and _st not in live_statuses:
+                continue
             bbox = trk.get("bbox")
             if not bbox or len(bbox) < 4:
                 continue
@@ -394,7 +401,7 @@ def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int
                 # frame will repopulate the wire payload.
                 serialized_v = []
 
-        extra: Dict[str, Any] = {}
+        extra: Dict[str, Any] = {"ts": meta.get("timestamp")}
         central_output_queue.put(
             (meta["feed_id"], meta["frame_index"], meta["frame_bytes"], combined_metrics, serialized_v, extra),
             timeout=0.05,
@@ -927,14 +934,20 @@ def inference_worker(
                             t_feed_id, t_frame_idx = task[0], task[1]
                             shm_ref = task[2]
                             if t_frame_idx not in (-888, -999):
-                                if t_feed_id in core_modules and getattr(
+                                if t_frame_id in core_modules and getattr(
                                     core_modules[t_feed_id], "_first_detection_done", False
                                 ):
                                     if msg_id and hasattr(slot_q, "ack"):
                                         slot_q.ack(msg_id)
                                         acked_msgs.add(msg_id)
                                     if frame_buffer:
-                                        frame_buffer.release(shm_ref)
+                                        # Never read() this ref, so ownership is
+                                        # unverified: a plain release() here could
+                                        # strip a recycled segment's NEW owner's
+                                        # acquired-set claim (audit #1 cross-feed
+                                        # corruption). release_if_owner checks the
+                                        # header feed_hash first.
+                                        frame_buffer.release_if_owner(shm_ref, t_feed_id)
                                     continue
 
                         batch_tasks.append((msg_id, task, slot_q))
@@ -1034,6 +1047,15 @@ def inference_worker(
                         pending_configs.pop(feed_id, None)
                         metrics_map.pop(feed_id, None)
                         _last_motion_gray.pop(feed_id, None)
+                        # Per-feed module-global telemetry/analyzer state, so a
+                        # recycled feed_id never inherits the previous owner's.
+                        for _d in (_FRAME_DIMS_BY_FEED, _TRACK_IDS_BY_FEED,
+                                   _TRACK_CENTERS_BY_FEED, _VRU_NM_TOTAL_BY_FEED,
+                                   _VRU_NM_LAST_FIRE_BY_FEED, _TG_TOTAL_BY_FEED,
+                                   _TG_LAST_FIRE_BY_FEED, _BE_STATE_BY_FEED,
+                                   _BE_TOTAL_BY_FEED, _BE_LAST_BY_FEED,
+                                   _COL_TOTAL_BY_FEED, _COL_LAST_FIRE_BY_FEED):
+                            _d.pop(feed_id, None)
                         if msg_id and hasattr(slot_q_ref, "ack"):
                             slot_q_ref.ack(msg_id)
                             acked_msgs.add(msg_id)
@@ -1267,6 +1289,15 @@ def inference_worker(
                                 if _diff < motion_diff_threshold:
                                     should_detect = False
                                     metrics_obj.frames_skipped += 1
+                                    # Static scene: the vehicles are still there,
+                                    # just not re-detected. Refresh last_seen so
+                                    # the passthrough overlay (_forward_frame's
+                                    # age filter) and the tracker timeout don't
+                                    # expire live tracks during long static holds.
+                                    _vd = getattr(getattr(core, "tracker", None), "vehicle_data", None) or {}
+                                    for _t in _vd.values():
+                                        if isinstance(_t, dict) and _t.get("status") in ("active", "predicting"):
+                                            _t["last_seen"] = timestamp
                                     # Lane frames keep the decoded image (lane
                                     # detection still runs predict-only); pure
                                     # detect frames fall to the passthrough path.
@@ -1325,7 +1356,8 @@ def inference_worker(
                         # with negligible mAP loss on vehicles. We clamp to
                         # the configured `yolo_imgsz` as a ceiling so we never
                         # upscale beyond the operator's accuracy budget.
-                        first_h, first_w = frames_to_infer[0].shape[:2]
+                        batch_h = max(f.shape[0] for f in frames_to_infer)
+                        batch_w = max(f.shape[1] for f in frames_to_infer)
                         yolo_imgsz_cap = int(vehicle_det_cfg.get("yolo_imgsz", 640))
                         # TensorRT engines are shape-locked to their export
                         # imgsz, which is the SAME config value --
@@ -1339,7 +1371,7 @@ def inference_worker(
                         if is_trt_engine:
                             runtime_imgsz = yolo_imgsz_cap
                         else:
-                            runtime_imgsz = min(max(64, yolo_imgsz_cap), max(first_h, first_w))
+                            runtime_imgsz = min(max(64, yolo_imgsz_cap), max(batch_h, batch_w))
                         results = shared_model(
                             frames_to_infer, conf=batch_conf_floor, imgsz=runtime_imgsz,
                             classes=sorted(vehicle_class_ids), max_det=max_detections_per_frame,
@@ -1612,6 +1644,13 @@ def inference_worker(
                                     if mapped_id:
                                         track["global_vehicle_id"] = mapped_id
 
+                        # Persist vehicle rows AFTER global ReID assignment so each
+                        # DB write carries the freshly-matched global_vehicle_id
+                        # alongside complete kinematics. (Previously done inside
+                        # CoreModule.detect_and_track, which runs before this
+                        # block -- new tracks were written with global_vehicle_id="".)
+                        core._save_vehicle_data(vis_tracks or {})
+
                         monitor.update_vehicles(vis_tracks)
 
                         # VRU analysis (#7): per-frame counts + near-miss pairs
@@ -1692,12 +1731,12 @@ def inference_worker(
                         if be_enabled and meta["should_detect"] and not batch_inference_failed:
                             _fkey = meta["feed_id"]
                             be_frame = be_frame_stats(
-                                vis_tracks, time.time(),
+                                vis_tracks, meta.get("timestamp") or time.time(),
                                 _BE_STATE_BY_FEED.setdefault(_fkey, {}),
                                 limit_kmh=float(config.get("speed_limit", 60.0)),
                                 margin_kmh=float(be_cfg.get("speeding_margin_kmh", 5.0)),
                                 min_stationary_sec=float(be_cfg.get("parking_min_stationary_sec", 300.0)),
-                                stopped_speed_kmh=float(config.get("stopped_speed_threshold_kmh", 5.0)),
+                                stopped_speed_kmh=float(config.get("behavior_analysis", {}).get("stopped_speed_threshold_kmh", config.get("stopped_speed_threshold_kmh", 5.0))),
                                 lane_change_min_seen=int(be_cfg.get("lane_change_min_seen_frames", 10)),
                                 max_events=int(be_cfg.get("max_events", 5)),
                             )
@@ -1750,7 +1789,7 @@ def inference_worker(
                                 vis_tracks,
                                 iou_thresh=float(col_cfg.get("iou_threshold", 0.35)),
                                 brake_accel_mps2=float(col_cfg.get("brake_accel_mps2", -2.0)),
-                                stopped_speed_kmh=float(config.get("stopped_speed_threshold_kmh", 5.0)),
+                                stopped_speed_kmh=float(config.get("behavior_analysis", {}).get("stopped_speed_threshold_kmh", config.get("stopped_speed_threshold_kmh", 5.0))),
                                 max_events=int(col_cfg.get("max_events", 3)),
                             )
                             _fkey = meta["feed_id"]
@@ -1831,7 +1870,7 @@ def inference_worker(
                             norm_width=_fw, norm_height=_fh,
                         )
 
-                        extra = {}
+                        extra = {"ts": meta.get("timestamp")}
                         try:
                             # Lane geometry (normalized 0-1): forwarded so the
                             # frontend can render lane-flow overlays client-side

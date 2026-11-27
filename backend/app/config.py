@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Assuming load_config is defined in utils.utils
-from app.utils.config import load_config, ConfigError
+from app.utils.config import load_config, load_yaml_strict, ConfigError
 from app.utils.secrets_manager import secrets
 
 logger = logging.getLogger("app.config")
@@ -260,9 +260,8 @@ def initialize_config(config_path: Optional[str] = None, force: bool = False) ->
             features_path = path_to_load.parent / "features.yaml"
             if features_path.exists():
                 try:
-                    import yaml
                     with open(features_path, "r") as f:
-                        features_cfg = yaml.safe_load(f) or {}
+                        features_cfg = load_yaml_strict(f) or {}
                     if "feature_flags" not in raw_config:
                         raw_config["feature_flags"] = {}
                     for k, v in features_cfg.items():

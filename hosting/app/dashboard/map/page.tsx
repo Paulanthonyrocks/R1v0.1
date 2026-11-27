@@ -74,6 +74,7 @@ const LiveMapPage: React.FC = () => {
       await feedService.updateFeedConfig(locFeedKey, { latitude: r.lat, longitude: r.lon });
       // Marker moves on the next WS feed_update broadcast (LeafletMap).
       setLocStatus(`Set ${locFeedKey} → ${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}`);
+      setShowLocPanel(false);
     } catch (e: any) {
       setLocStatus(`save failed: ${e?.message || e}`);
     }

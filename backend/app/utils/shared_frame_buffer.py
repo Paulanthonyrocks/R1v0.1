@@ -556,6 +556,45 @@ class SharedFrameBuffer:
         except Exception as e:
             logger.error(f"Error releasing {name}: {e}")
 
+    def peek_feed_hash(self, name: Union[str, bytes]) -> Optional[int]:
+        """Header-only ownership probe: the feed_hash in the segment header,
+        without copying the payload. None if the segment can't be inspected."""
+        try:
+            if isinstance(name, bytes):
+                name = name.decode("utf-8")
+            if name not in self._segments:
+                with self._lock:
+                    if name not in self._segments:
+                        self._segments[name] = shared_memory.SharedMemory(name=name)
+            buf = self._segments[name].buf
+            _version, _size, _w, _h, _c, feed_hash = struct.unpack_from("<I iiii I", buf, 0)
+            return feed_hash
+        except Exception:
+            return None
+
+    def release_if_owner(self, name: Union[str, bytes], expected_feed_id: str) -> bool:
+        """Release a segment only if its header still belongs to expected_feed_id.
+
+        For callers that shed a frame WITHOUT reading it first (e.g. the
+        inference worker's smart-skip under backlog): a plain release() there
+        can strip the NEW owner's acquired-set claim and push a phantom
+        duplicate into the free pool if prune_stale_segments already recycled
+        the segment to another feed. If ownership can't be verified, skip the
+        release -- prune_stale_segments reclaims the segment later, whereas a
+        wrongful release corrupts another feed's lease.
+        """
+        h = self.peek_feed_hash(name)
+        if h is None:
+            return False
+        if h != zlib.adler32(expected_feed_id.encode()):
+            logger.debug(
+                f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE skipped {name}: "
+                f"header belongs to another feed (recycled); not ours to free."
+            )
+            return False
+        self.release(name)
+        return True
+
     def available_count(self) -> int:
         """Public accessor for the number of free SHM segments.
 

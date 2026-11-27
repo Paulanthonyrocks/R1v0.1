@@ -248,17 +248,17 @@ const TrafficMap = forwardRef<any, {
       className="border border-lcd-green/30 bg-industrial-panel relative h-full w-full overflow-hidden font-lcd"
     >
       {/* Tactical Viewport Frame */}
-      <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-lcd-green z-[1003]" />
-      <div className="absolute top-0 right-0 w-2 h-2 border-t-2 border-r-2 border-lcd-green z-[1003]" />
-      <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-lcd-green z-[1003]" />
-      <div className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-lcd-green z-[1003]" />
+      <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-lcd-green z-10" />
+      <div className="absolute top-0 right-0 w-2 h-2 border-t-2 border-r-2 border-lcd-green z-10" />
+      <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-lcd-green z-10" />
+      <div className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-lcd-green z-10" />
 
       {/* Viewport Overlays */}
-      <div className="absolute inset-0 pointer-events-none z-[1001] opacity-20">
+      <div className="absolute inset-0 pointer-events-none z-10 opacity-20">
         <div className="absolute top-1/2 left-0 w-full h-px bg-lcd-green" />
         <div className="absolute top-0 left-1/2 w-px h-full bg-lcd-green" />
       </div>
-      <div className="absolute inset-0 pointer-events-none z-[1001] opacity-10 bg-[repeating-linear-gradient(0deg,transparent,transparent_2px,var(--lcd-green)_2px,var(--lcd-green)_4px)]" />
+      <div className="absolute inset-0 pointer-events-none z-10 opacity-10 bg-[repeating-linear-gradient(0deg,transparent,transparent_2px,var(--lcd-green)_2px,var(--lcd-green)_4px)]" />
 
       {/* Background Map */}
       <LeafletMap
@@ -273,7 +273,7 @@ const TrafficMap = forwardRef<any, {
       {/* THREE.js overlay will be appended here */}
 
       {/* Viewport Crosshair */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-[1002] opacity-30 text-lcd-green">
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-10 opacity-30 text-lcd-green">
         <Crosshair size={40} strokeWidth={1} />
       </div>
     </section>

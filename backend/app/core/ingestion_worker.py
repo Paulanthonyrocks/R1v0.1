@@ -541,14 +541,11 @@ def ingestion_worker(
 
                 result = reader.read()
                 if result is None:
-                    if reader.end_of_video and not is_looped:
-                        # Non-looped file reached its end (FrameReader sets
-                        # end_of_video and stops its thread, so isOpened is
-                        # already False). No reconnect path exists here — exit
-                        # cleanly rather than busy-looping on a dead source.
-                        logger.info(f"[{feed_id}] End of stream.")
-                        break
-                    elif reader.end_of_video:
+                    if reader.end_of_video:
+                        # Both non-looped and looped files exit here (FrameReader
+                        # sets end_of_video and stops its thread). No reconnect
+                        # path exists — exit cleanly rather than busy-looping on
+                        # a dead source.
                         logger.info(f"[{feed_id}] End of stream.")
                         break
 
@@ -612,29 +609,15 @@ def ingestion_worker(
                         metrics.errors += 1
                         continue
 
-                    shm_ref = frame_buffer.acquire()
-                    if not shm_ref:
-                        metrics.frames_dropped += 1
-                        metrics.drops_other += 1
-                        # SHM pool exhausted - apply aggressive backpressure
-                        # Graduated backpressure based on recent drop rate
-                        drop_rate = metrics.frames_dropped / max(1, metrics.frames_processed + metrics.frames_dropped)
-                        
-                        # Higher drop rate = longer backoff (10ms to 100ms)
-                        sleep_time = min(0.01 + (drop_rate * 0.09), 0.1)
-                        time.sleep(sleep_time)
-                        
-                        if metrics.frames_dropped % 20 == 0:
-                            logger.warning(f"[{feed_id}] SHM pool exhausted, drop_rate={drop_rate:.1%}, applying backpressure ({sleep_time*1000:.0f}ms)")
-                        continue
-                    
-                    # Get free pool size to apply graduated backpressure
+                    # Graduated backpressure based on free pool percentage.
+                    # BEFORE acquire(): sleeping while holding an acquired
+                    # segment makes pool starvation worse (the segment is
+                    # hostage during the sleep).
                     free_pool_size = frame_buffer.available_count()
                     pool_size = frame_buffer.pool_size
-                    
-                    # Graduated backpressure based on free pool percentage
+
                     free_percent = (free_pool_size / pool_size) * 100 if pool_size > 0 else 0
-                    
+
                     if free_percent < 10:
                         # Critical: < 10% free - aggressive slowdown
                         time.sleep(0.03)
@@ -646,6 +629,22 @@ def ingestion_worker(
                     elif free_percent < 40:
                         # Caution: < 40% free - slight slowdown
                         time.sleep(0.005)
+
+                    shm_ref = frame_buffer.acquire()
+                    if not shm_ref:
+                        metrics.frames_dropped += 1
+                        metrics.drops_other += 1
+                        # SHM pool exhausted - apply aggressive backpressure
+                        # Graduated backpressure based on recent drop rate
+                        drop_rate = metrics.frames_dropped / max(1, metrics.frames_processed + metrics.frames_dropped)
+
+                        # Higher drop rate = longer backoff (10ms to 100ms)
+                        sleep_time = min(0.01 + (drop_rate * 0.09), 0.1)
+                        time.sleep(sleep_time)
+
+                        if metrics.frames_dropped % 20 == 0:
+                            logger.warning(f"[{feed_id}] SHM pool exhausted, drop_rate={drop_rate:.1%}, applying backpressure ({sleep_time*1000:.0f}ms)")
+                        continue
 
                     frame_buffer.write(shm_ref, last_frame_bytes, feed_id=feed_id)
 

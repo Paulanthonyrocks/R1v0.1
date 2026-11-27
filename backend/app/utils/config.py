@@ -10,6 +10,69 @@ class ConfigError(Exception):
     pass
 
 
+class _DuplicateKeyError(yaml.YAMLError):
+    pass
+
+
+def _construct_mapping_no_dups(loader, node, deep=False):
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=True)
+        if key in mapping:
+            raise _DuplicateKeyError(
+                f"duplicate YAML key {key!r} at line {key_node.start_mark.line + 1}"
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+class StrictYamlLoader(yaml.SafeLoader):
+    """SafeLoader that rejects duplicate mapping keys instead of silently
+    letting the last one win."""
+
+
+StrictYamlLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping_no_dups
+)
+
+
+def load_yaml_strict(stream):
+    """yaml.safe_load equivalent that raises ConfigError on duplicate keys."""
+    try:
+        return yaml.load(stream, Loader=StrictYamlLoader)
+    except _DuplicateKeyError as e:
+        raise ConfigError(f"Duplicate key in YAML: {e}") from e
+
+
+def _check_coupled_keys(config: Dict[str, Any]) -> None:
+    """Fail loudly when redundant keys that must agree have drifted apart.
+
+    Several FRs are governed by multiple YAML keys read by different
+    consumers; when they disagree, behavior silently follows whichever
+    reader fires first (e.g. result_processor dedups wire fps to the
+    minimum of top-level fps / video_output.fps / target_fps).
+    """
+    problems = []
+    fps_keys = {
+        "fps": config.get("fps"),
+        "video_output.fps": config.get("video_output", {}).get("fps"),
+        "video_processing.target_fps": config.get("video_processing", {}).get("target_fps"),
+    }
+    present = {k: v for k, v in fps_keys.items() if v is not None}
+    if len(present) > 1 and len(set(present.values())) > 1:
+        problems.append(f"frame-rate keys disagree: {present}")
+    stopped_keys = {
+        "stopped_speed_threshold_kmh": config.get("stopped_speed_threshold_kmh"),
+        "behavior_analysis.stopped_speed_threshold_kmh": config.get("behavior_analysis", {}).get("stopped_speed_threshold_kmh"),
+        "collision_detection.stopped_speed_kmh": config.get("collision_detection", {}).get("stopped_speed_kmh"),
+    }
+    present = {k: v for k, v in stopped_keys.items() if v is not None}
+    if len(present) > 1 and len(set(present.values())) > 1:
+        problems.append(f"stopped-speed keys disagree: {present}")
+    if problems:
+        raise ConfigError("Coupled config keys drifted apart: " + "; ".join(problems))
+
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "llm": {
         "mode": "mock",
@@ -66,9 +129,12 @@ def load_config(config_file: Path = Path("config.yaml")) -> Dict[str, Any]:
     if config_file.exists():
         try:
             with open(config_file, "r") as f:
-                user_config = yaml.safe_load(f)
+                user_config = load_yaml_strict(f)
             if user_config:  # Check if the user_config is not None
                 config = merge_dicts(config, user_config)
+            _check_coupled_keys(config)
+        except ConfigError:
+            raise
         except yaml.YAMLError as e:
             logging.error(f"Error parsing YAML file: {e}")
             raise ConfigError(f"Error parsing YAML file: {e}") from e

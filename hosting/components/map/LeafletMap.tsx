@@ -848,7 +848,12 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
         updates.mount_height_m = placement.mountHeight;
       }
       await feedService.updateFeedConfig(placingFeedId, updates);
-      setPlacingMsg('SAVED — NEXT WS FEED_UPDATE MOVES MARKER + CONE');
+      // Success closes the placement menu (same teardown as Cancel): the
+      // marker + cone move on the next WS feed_update broadcast.
+      setPlacingFeedId('');
+      setPlacement(null);
+      setPlacingMsg('');
+      placeLayer.current.clearLayers();
     } catch (err) {
       setPlacingMsg(`SAVE FAILED: ${(err as Error)?.message || err}`);
     } finally {
@@ -1201,7 +1206,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
       <div ref={mapRef} className="absolute inset-0 z-0" />
 
       {/* Search Bar */}
-      <div className="absolute top-20 left-4 z-[1002] w-72 font-mono">
+      <div className="absolute top-20 left-4 z-20 w-72 font-mono">
         <div className="flex gap-1 mb-1">
           <button
             onClick={() => setShowCoverage(v => !v)}
@@ -1285,14 +1290,14 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
       </div>
 
       {/* HUD Overlays */}
-      <div className="absolute top-4 right-4 z-[1002] flex flex-col gap-2">
+      <div className="absolute top-4 right-4 z-20 flex flex-col gap-2">
         {/* Layer Control removed and moved to TOP HUD in page.tsx */}
       </div>
 
       {/* Event Queue: live WS alerts, newest first. Click an entry to fly to
           its marker and open the incident panel. */}
       {alerts && alerts.length > 0 && (
-        <div className="absolute bottom-4 left-4 z-[1002] w-72 font-mono bg-black/95 border border-[#00ff41]/40 shadow-[0_0_20px_rgba(0,255,65,0.15)]">
+        <div className="absolute bottom-4 left-4 z-20 w-72 font-mono bg-black/95 border border-[#00ff41]/40 shadow-[0_0_20px_rgba(0,255,65,0.15)]">
           <button
             onClick={() => setShowEventQueue(v => !v)}
             className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-[#00ff41] border-b border-[#00ff41]/20 hover:bg-[#00ff41]/10"
@@ -1326,7 +1331,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
       {/* Alert / Incident Detail Panel */}
       {selectedAlert && (
         <div
-          className="absolute bottom-4 right-4 z-[1002] bg-black/95 border-2 p-4 w-72 font-mono shadow-[0_0_30px_rgba(0,255,65,0.2)]"
+          className="absolute bottom-4 right-4 z-20 bg-black/95 border-2 p-4 w-72 font-mono shadow-[0_0_30px_rgba(0,255,65,0.2)]"
           style={{ borderColor: sevColor(selectedAlert.severity) }}
         >
           <div className="flex justify-between items-start mb-3">
@@ -1383,7 +1388,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
 
       {/* Node & Signal Info Panel */}
       {selectedNode && !selectedAlert && (
-        <div className="absolute bottom-4 right-4 z-[1002] bg-black/95 border-2 border-[#00ff41] p-4 w-72 font-mono text-[#00ff41] shadow-[0_0_30px_rgba(0,255,65,0.2)]">
+        <div className="absolute bottom-4 right-4 z-20 bg-black/95 border-2 border-[#00ff41] p-4 w-72 font-mono text-[#00ff41] shadow-[0_0_30px_rgba(0,255,65,0.2)]">
           <div className="flex justify-between items-start mb-4">
             <div>
               <h3 className="text-sm font-bold uppercase tracking-tighter">Telemetric Uplink</h3>
@@ -1461,7 +1466,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
           normalized image coords (u, v in [0,1]) seen on that feed's live video.
           Saved via PATCH /api/v1/feeds/{id}/config; backend builds the homography. */}
       {calibrating && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1002] w-[26rem] font-mono bg-black/95 border border-[#facc15]/50 p-3 shadow-[0_0_25px_rgba(250,204,21,0.2)]">
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 w-[26rem] font-mono bg-black/95 border border-[#facc15]/50 p-3 shadow-[0_0_25px_rgba(250,204,21,0.2)]">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] font-bold uppercase tracking-widest text-[#facc15]">Geo Calibration</span>
             <span className="text-[9px] text-[#facc15]/60 uppercase">click map → fill image u,v</span>
@@ -1526,7 +1531,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
 
       {/* Corridor drive-through panel: cameras on the selected road in chainage order */}
       {selectedRoadId && (
-        <div className="absolute bottom-4 left-4 z-[1002] w-64 font-mono bg-black/95 border border-[#22d3ee]/50 p-2 shadow-[0_0_25px_rgba(34,211,238,0.2)]">
+        <div className="absolute bottom-4 left-4 z-20 w-64 font-mono bg-black/95 border border-[#22d3ee]/50 p-2 shadow-[0_0_25px_rgba(34,211,238,0.2)]">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] font-bold uppercase tracking-widest text-[#22d3ee]">
               Corridor: {roads.find(r => r.id === selectedRoadId)?.name || selectedRoadId}
@@ -1605,7 +1610,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
           Click the map to drop the camera (snaps to nearest road), pick road +
           facing heading, save via PATCH /api/v1/feeds/{id}/config. */}
       {placingFeedId && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1002] w-[26rem] font-mono bg-black/95 border border-[#22d3ee]/50 p-3 shadow-[0_0_25px_rgba(34,211,238,0.2)]">
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 w-[26rem] font-mono bg-black/95 border border-[#22d3ee]/50 p-3 shadow-[0_0_25px_rgba(34,211,238,0.2)]">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] font-bold uppercase tracking-widest text-[#22d3ee] flex items-center gap-1">
               <Crosshair size={12} /> Camera Placement

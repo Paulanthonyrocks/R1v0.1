@@ -88,6 +88,7 @@ class TrackData(TypedDict, total=False):
     status: str
     prev_status: str
     speed: float
+    _raw_speed_kmh: Optional[float]
     last_reid_speed: float
     embedding: Optional[np.ndarray]
     last_reid_update: int
@@ -137,6 +138,11 @@ class CoreModule:
         self.feed_id = feed_id
         self.config = copy.deepcopy(config)
         self.fps = fps
+        # Measured detect rate (EWMA of 1/dt over processed frames). Config
+        # fps is a target; under skip_frames / SHM shedding the real rate is
+        # far lower, and px/frame motion must be scaled by the REAL rate.
+        self._measured_fps = float(fps or 30.0)
+        self._last_frame_time: Optional[float] = None
         self.db_queue = db_queue
         self.gemini_api_key = gemini_api_key
         self.model_type = model_type
@@ -677,6 +683,10 @@ class CoreModule:
             return {}, self.cached_lane_boundaries, self.last_detected_lane_lines
 
         current_time = timestamp if timestamp is not None else time.time()
+        if self._last_frame_time is not None and current_time > self._last_frame_time:
+            _inst_fps = 1.0 / (current_time - self._last_frame_time)
+            self._measured_fps = 0.7 * self._measured_fps + 0.3 * _inst_fps
+        self._last_frame_time = current_time
         # Sub-stage timing (Sep-10): STAGE-TIMINGS showed track_post at
         # ~200-290ms/frame while a cProfile sim of tracker.update alone ran
         # ~21ms at 72 tracks -- most of the cost lives in this function AFTER
@@ -839,7 +849,7 @@ class CoreModule:
                         continue
                     _tr["vx"], _tr["vy"] = adjust_velocity(
                         float(_tr.get("vx") or 0.0), float(_tr.get("vy") or 0.0),
-                        _motion, self.fps,
+                        _motion, self._measured_fps,
                         min_motion_px=float(self._cm_cfg.get("min_motion_px_per_frame", 0.5)),
                     )
         _t_finalize = time.perf_counter()
@@ -858,39 +868,6 @@ class CoreModule:
                 reverse=True,
             )
             vehicle_data = dict(by_seen[: self.max_active_tracks])
-
-        # Apply previous statuses for adaptive ReID
-        for tid, track in vehicle_data.items():
-            track["prev_status"] = current_statuses.get(tid, "unknown")
-        if self.reid_embedder and (_assoc_stride <= 1 or frame_index % _assoc_stride == 0):
-            needs_emb = []
-            h, w = frame.shape[:2]
-            self._reid_updates_this_frame = 0
-            budget_cap = self.config.get("performance", {}).get("reid_budget_per_frame", 10)
-
-            for tid, track in vehicle_data.items():
-                if self._reid_updates_this_frame >= budget_cap:
-                    break
-                if self._should_update_reid(tid, track, frame_index):
-                    bbox = track.get("bbox")
-                    if bbox:
-                        # Mark attempt immediately to prevent loops on failure
-                        track["last_reid_attempt"] = frame_index
-                        x1, y1, x2, y2 = map(int, bbox)
-                        x1, y1 = max(0, x1), max(0, y1)
-                        x2, y2 = min(w, x2), min(h, y2)
-                        if x2 > x1 and y2 > y1:
-                            needs_emb.append((tid, frame[y1:y2, x1:x2]))
-                            self._reid_updates_this_frame += 1
-
-            if needs_emb:
-                tids, rois = zip(*needs_emb)
-                embeddings = self.reid_embedder.get_batch_embeddings(list(rois))
-                for tid, emb in zip(tids, embeddings):
-                    if emb is not None:
-                        vehicle_data[tid]["embedding"] = emb
-                        vehicle_data[tid]["last_reid_update"] = frame_index
-                        vehicle_data[tid]["last_reid_speed"] = vehicle_data[tid].get("speed", 0.0)
 
         # 5. Metadata processing (vectorised centroid batch transform)
         vis_tracks: Dict[str, Dict] = {}
@@ -938,6 +915,10 @@ class CoreModule:
                             # and corrupt every subsequent smoothed value. The 180
                             # km/h physical cap below is the final safety net.
                             raw_speed = min(raw_speed, 180.0)
+                            # Keep the raw (pre-EWMA) sample: acceleration
+                            # physics must differentiate real motion, not the
+                            # smoothed display value.
+                            track["_raw_speed_kmh"] = raw_speed
                             # Sanity cap: skip EWMA after long occlusion gaps
                             if dt > 2.0:
                                 track["speed"] = raw_speed
@@ -951,11 +932,13 @@ class CoreModule:
                                 )
                         else:
                             track["speed"] = track.get("speed", 0.0)
+                            track["_raw_speed_kmh"] = track.get("speed", 0.0)
                     else:
                         # First frame for this track — fall back to pixel velocity
                         speed_result = self._pixel_based_speed(track)
                         track["speed"] = speed_result["speed_kmh"]
                         track["speed_calibrated"] = speed_result["calibrated"]
+                        track["_raw_speed_kmh"] = speed_result["speed_kmh"]
 
                     track["prev_ground_pos"] = (curr_gx, curr_gy)
                     track["prev_t"] = current_time
@@ -971,6 +954,7 @@ class CoreModule:
                     speed_result = self._pixel_based_speed(track)
                     track["speed"] = speed_result["speed_kmh"]
                     track["speed_calibrated"] = speed_result["calibrated"]
+                    track["_raw_speed_kmh"] = speed_result["speed_kmh"]
 
                 # Physical speed cap to prevent anomalies (e.g., 180 km/h).
                 # Only clamp when we actually have a numeric speed; an
@@ -984,7 +968,16 @@ class CoreModule:
                 # branches permanent no-ops (audit C2).
                 prev_speed_accel = track.get("prev_speed_for_accel")
                 prev_speed_t = track.get("prev_speed_t")
-                if prev_speed_accel is not None and prev_speed_t is not None:
+                # Acceleration differentiates the RAW speed (pre-EWMA), so
+                # ewma_alpha smoothing cannot attenuate real hard-brakes;
+                # fall back to the smoothed value, and never crash on None
+                # (uncalibrated feeds store speed=None by design).
+                accel_src = track.get("_raw_speed_kmh")
+                if accel_src is None:
+                    accel_src = track.get("speed")
+                if accel_src is None:
+                    track["acceleration"] = 0.0
+                elif prev_speed_accel is not None and prev_speed_t is not None:
                     a_dt = current_time - prev_speed_t
                     # Only trust acceleration when it reflects REAL motion: the
                     # prior speed had to be above a floor (a slow crawl easing off
@@ -998,11 +991,11 @@ class CoreModule:
                         a_dt > self.min_accel_dt_seconds
                         and prev_speed_accel >= self.min_speed_for_accel_kmh
                     ):
-                        raw_accel = (track["speed"] - prev_speed_accel) / 3.6 / a_dt
+                        raw_accel = (accel_src - prev_speed_accel) / 3.6 / a_dt
                         if raw_accel < self.min_physical_accel_mps2:
                             raw_accel = 0.0  # physics-impossible spike = tracking noise
                     track["acceleration"] = raw_accel
-                track["prev_speed_for_accel"] = track["speed"]
+                track["prev_speed_for_accel"] = accel_src
                 track["prev_speed_t"] = current_time
 
                 # Compass-style direction from Kalman velocity (image coords:
@@ -1034,15 +1027,56 @@ class CoreModule:
             self._lane_votes = {k: v for k, v in self._lane_votes.items() if k in vehicle_data}
         _sub["finalize"] += time.perf_counter() - _t_finalize
 
+        # Post-tracker ReID gallery refresh. Runs AFTER step 5 (kinematics) so
+        # _should_update_reid's velocity-change check compares THIS frame's
+        # speed, not last frame's (sequence-inversion fix). Cadence uses its
+        # own key, reid_gallery_frame_stride -- independent of
+        # reid_assoc_frame_stride, which only gates the pre-tracker
+        # association embeddings in step 3.
+        for tid, track in vehicle_data.items():
+            track["prev_status"] = current_statuses.get(tid, "unknown")
+        _gallery_stride = int(_track_cfg.get("reid_gallery_frame_stride", 1) or 1)
+        if self.reid_embedder and (_gallery_stride <= 1 or frame_index % _gallery_stride == 0):
+            needs_emb = []
+            h, w = frame.shape[:2]
+            self._reid_updates_this_frame = 0
+            budget_cap = self.config.get("performance", {}).get("reid_budget_per_frame", 10)
+
+            for tid, track in vehicle_data.items():
+                if self._reid_updates_this_frame >= budget_cap:
+                    break
+                if self._should_update_reid(tid, track, frame_index):
+                    bbox = track.get("bbox")
+                    if bbox:
+                        # Mark attempt immediately to prevent loops on failure
+                        track["last_reid_attempt"] = frame_index
+                        x1, y1, x2, y2 = map(int, bbox)
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(w, x2), min(h, y2)
+                        if x2 > x1 and y2 > y1:
+                            needs_emb.append((tid, frame[y1:y2, x1:x2]))
+                            self._reid_updates_this_frame += 1
+
+            if needs_emb:
+                tids, rois = zip(*needs_emb)
+                embeddings = self.reid_embedder.get_batch_embeddings(list(rois))
+                for tid, emb in zip(tids, embeddings):
+                    if emb is not None:
+                        vehicle_data[tid]["embedding"] = emb
+                        vehicle_data[tid]["last_reid_update"] = frame_index
+                        # Fresh speed now exists (step 5 ran): record it.
+                        vehicle_data[tid]["last_reid_speed"] = vehicle_data[tid].get("speed", 0.0)
+
         # Drain OCR and persist individual vehicle observations
         _t_tail = time.perf_counter()
 
-        # Drain OCR results FIRST so any plate recognised this frame is reflected
-        # in the DB write (and in vis_tracks) instead of being deferred a frame
-        # (audit 3.1). Previously _save_vehicle_data ran before OCR processing.
+        # Drain OCR results so any plate recognised this frame is reflected in
+        # vis_tracks (and in the DB write, which the inference worker now
+        # performs AFTER global ReID -- _save_vehicle_data used to run here,
+        # before match_or_register, so new tracks were persisted with an empty
+        # global_vehicle_id).
         self._process_ocr_results(vehicle_data)
 
-        self._save_vehicle_data(vis_tracks)
         _sub["metrics_ocr_db"] += time.perf_counter() - _t_tail
 
         # Reuse the STAGE-TIMINGS 30s cadence: log the sub-stage split here so
@@ -1404,6 +1438,8 @@ class CoreModule:
                 if isinstance(roi_points, list):
                     self.roi_polygon_points = roi_points
                     self._roi_px_cache.clear()  # hot-path memo is stale
+                    # Hysteresis votes were cast under the old geometry.
+                    self._lane_votes.clear()
                     # Keep config in sync so other modules reading the dict see the
                     # new polygon (audit 1.2). Previously only internal state changed.
                     roi_cfg = self.config.get("roi_processing", {})
