@@ -229,7 +229,7 @@ def _plate_boxes_for_sidecar(core, frame_dims) -> list:
     return out
 
 
-def _write_mask_sidecar(snapshot_path: str, core, config) -> bool:
+def _write_mask_sidecar(snapshot_path: str, core, config, snapshot_meta: Optional[Dict] = None) -> bool:
     """Write `<snapshot>.boxes.json` for PrivacyService to consume.
 
     Returns True when a sidecar was written. When there are no boxes it
@@ -260,6 +260,12 @@ def _write_mask_sidecar(snapshot_path: str, core, config) -> bool:
             # same frame, but not guaranteed. A box that lands slightly off
             # still errs toward masking a wider region, never a narrower one.
             "frame_alignment": "approximate",
+            # Frame-index provenance for the image/box drift: the snapshot
+            # image is ingestion's last decoded frame (snapshot_frame_index),
+            # these boxes are this worker's last processed frame
+            # (sidecar_frame_index) -- under backlog the two diverge.
+            "snapshot_frame_index": (snapshot_meta or {}).get("frame_index"),
+            "sidecar_frame_index": _LAST_FRAME_IDX_BY_FEED.get(getattr(core, "feed_id", None) or ""),
             "written_at": time.time(),
         }))
         logger.debug(f"Mask sidecar written: {sidecar} ({len(boxes)} plate region(s))")
@@ -293,6 +299,8 @@ _BE_TOTAL_BY_FEED: Dict[str, Dict[str, int]] = {}
 _BE_LAST_BY_FEED: Dict[str, Dict[str, float]] = {}
 _COL_TOTAL_BY_FEED: Dict[str, int] = {}
 _COL_LAST_FIRE_BY_FEED: Dict[str, float] = {}
+# Last processed frame index per feed (snapshot sidecar provenance).
+_LAST_FRAME_IDX_BY_FEED: Dict[str, int] = {}
 
 
 def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int) -> None:
@@ -577,6 +585,10 @@ def inference_worker(
     # Read skip_frames from inference section (preferred) or vehicle_detection (fallback)
     skip_frames = inference_cfg.get("skip_frames", vehicle_det_cfg.get("skip_frames", 2))
     skip_frames_base = skip_frames  # baseline cadence; adaptive skip multiplies this
+    # JPEG quality for the WIRE copy the worker re-encodes from a raw SHM
+    # frame (perception runs on the raw pixels, not on this JPEG). Defaults
+    # to the historical 70 so tunnel payload size is unchanged.
+    _wire_jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(config.get("video_output", {}).get("wire_jpeg_quality", 70))]
     skip_factor = 1.0  # baseline cadence; adaptive skip multiplies this. Initialised at boot, not lazily in the loop.
     # Scene-motion adaptive skip (inference.motion_skip): a cadence-detect
     # frame whose downscaled grayscale mean-abs-diff vs the last DETECTED
@@ -1027,6 +1039,7 @@ def inference_worker(
                                         _snap_path,
                                         core_modules.get(feed_id),
                                         config,
+                                        extra_payload,
                                     )
                             except Exception as e:
                                 # Best-effort: a missing sidecar degrades to an
@@ -1054,7 +1067,8 @@ def inference_worker(
                                    _VRU_NM_LAST_FIRE_BY_FEED, _TG_TOTAL_BY_FEED,
                                    _TG_LAST_FIRE_BY_FEED, _BE_STATE_BY_FEED,
                                    _BE_TOTAL_BY_FEED, _BE_LAST_BY_FEED,
-                                   _COL_TOTAL_BY_FEED, _COL_LAST_FIRE_BY_FEED):
+                                   _COL_TOTAL_BY_FEED, _COL_LAST_FIRE_BY_FEED,
+                                   _LAST_FRAME_IDX_BY_FEED):
                             _d.pop(feed_id, None)
                         if msg_id and hasattr(slot_q_ref, "ack"):
                             slot_q_ref.ack(msg_id)
@@ -1063,6 +1077,7 @@ def inference_worker(
 
                     # Read frame from shared memory
                     _t0 = time.perf_counter()
+                    raw_arr = None
                     if frame_buffer:
                         try:
                             res = frame_buffer.read(shm_ref, expected_feed_id=feed_id)
@@ -1098,6 +1113,24 @@ def inference_worker(
                             continue
                         if isinstance(res, tuple) and len(res) == 2:
                             frame_bytes, dims = res
+                            # Raw BGR payload (SHM header channels > 0): perception
+                            # consumes the array directly -- no JPEG round-trip.
+                            # Encode ONE JPEG for the wire so the central_output
+                            # payload size stays identical to the old path.
+                            if dims and len(dims) == 3 and dims[2] > 0 and frame_bytes:
+                                try:
+                                    raw_arr = np.frombuffer(frame_bytes, dtype=np.uint8).reshape(
+                                        dims[1], dims[0], dims[2]
+                                    ).copy()
+                                except Exception as e:
+                                    logger.warning(f"[Worker {worker_id}] raw SHM reshape failed for {feed_id}: {e}")
+                                    raw_arr = None
+                                if raw_arr is not None:
+                                    try:
+                                        _ok, _buf = cv2.imencode(".jpg", raw_arr, _wire_jpeg_params)
+                                        frame_bytes = _buf.tobytes() if _ok else b""
+                                    except Exception:
+                                        frame_bytes = b""
                         else:
                             logger.error(
                                 f"[Worker {worker_id}] SHM read unexpected format: {type(res)}"
@@ -1231,7 +1264,7 @@ def inference_worker(
 
                     frame = None
                     if should_detect or is_lane_frame:
-                        if frame_bytes is None:
+                        if raw_arr is None and not frame_bytes:
                             logger.error(f"[Worker {worker_id}] frame_bytes is None for ref {shm_ref}")
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
@@ -1246,7 +1279,9 @@ def inference_worker(
                                     pass
                             continue
 
-                        if isinstance(frame_bytes, memoryview):
+                        if raw_arr is not None:
+                            frame = raw_arr
+                        elif isinstance(frame_bytes, memoryview):
                             frame = cv2.imdecode(
                                 np.frombuffer(frame_bytes, dtype=np.uint8), cv2.IMREAD_COLOR
                             )
@@ -1312,6 +1347,7 @@ def inference_worker(
                             logger.debug(f"[Worker {worker_id}][{feed_id}] motion probe failed: {e}")
 
                     _stage_totals["shm_read_decode"] += time.perf_counter() - _t0
+                    _LAST_FRAME_IDX_BY_FEED[feed_id] = frame_index
                     meta_entry = {
                         "msg_id": msg_id,
                         "slot_q": slot_q_ref,

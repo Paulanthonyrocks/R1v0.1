@@ -96,6 +96,10 @@ database:
 feed_manager:
   db_write_interval: 0.5
   error_check_interval: 5.0
+  # Bounded queue between the result-processor broadcast loop and the
+  # safety/analytics/recording consumer task (result_processor.py); oldest
+  # dropped when full so the WS broadcast is never blocked.
+  safety_queue_maxsize: 256
   # Grace period between stop_event.set() and the SIGTERM escalation for a
   # feed's ingestion process. Was hardcoded 200ms, which fired on NORMAL
   # teardown in the live 3-feed run (children had already logged
@@ -1283,6 +1287,11 @@ video_output:
   # STRESS RUN (temporary): 5 -> 15 = native fps, removes the ingest throttle.
   # Watch METRICS drop split + SHM-STATS free fraction; revert to 5 after.
   fps: 15
+  # JPEG quality for the WIRE copy the inference worker re-encodes from the
+  # raw SHM frame (perception runs on raw BGR; this JPEG is only the
+  # central_output / recording payload). Kept at the historical 70 so tunnel
+  # bandwidth is unchanged.
+  wire_jpeg_quality: 70
   frame_resolution:
   - 640
   - 480

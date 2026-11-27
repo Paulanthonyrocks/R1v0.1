@@ -212,6 +212,22 @@ def ingestion_worker(
         logger.warning(f"[{feed_id}] Invalid stream_resolution {stream_res}, using (640, 480)")
         stream_res = (640, 480)
 
+    # Raw-pixel SHM transport: segments are fixed-size, so when the raw BGR
+    # frame fits we ship UNCOMPRESSED pixels and perception avoids the JPEG
+    # q70 round-trip entirely (ReID / OCR / plate legibility). The inference
+    # worker re-encodes a JPEG for the wire, so Redis payload size is
+    # unchanged. Falls back to JPEG transport when raw exceeds the segment.
+    _raw_bgr_size = stream_res[0] * stream_res[1] * 3
+    _shm_raw_ok = bool(
+        frame_buffer is not None
+        and _raw_bgr_size <= frame_buffer.max_frame_size - frame_buffer.HEADER_SIZE
+    )
+    if frame_buffer is not None and not _shm_raw_ok:
+        logger.warning(
+            f"[{feed_id}] raw {stream_res} ({_raw_bgr_size}B) exceeds SHM segment "
+            f"({frame_buffer.max_frame_size}B); falling back to JPEG transport"
+        )
+
     logger.info(f"[{feed_id}] Ingestion Config: FPS={target_fps}, Resolution={stream_res}")
 
     last_fps_log = time.time()
@@ -329,6 +345,7 @@ def ingestion_worker(
     consecutive_errors = 0
     max_consecutive_errors = 300
     last_frame_bytes = None
+    last_frame_index = None
     last_frame_format: Optional[str] = None
     shm_ref = None
 
@@ -371,6 +388,11 @@ def ingestion_worker(
                             "type": "snapshot_saved",
                             "incident_id": incident_id,
                             "snapshot_path": str(snap_path),
+                            # Provenance for the image/box drift: the frame
+                            # index this snapshot image came from (the sidecar
+                            # boxes come from the inference worker's last
+                            # processed frame, tracked separately).
+                            "frame_index": last_frame_index,
                         },
                     ),
                     critical=True,
@@ -581,6 +603,7 @@ def ingestion_worker(
                         continue
 
                     last_frame_bytes = snap_buf.tobytes()
+                    last_frame_index = frame_index
 
                     if not last_frame_bytes:
                         logger.warning(
@@ -646,7 +669,11 @@ def ingestion_worker(
                             logger.warning(f"[{feed_id}] SHM pool exhausted, drop_rate={drop_rate:.1%}, applying backpressure ({sleep_time*1000:.0f}ms)")
                         continue
 
-                    frame_buffer.write(shm_ref, last_frame_bytes, feed_id=feed_id)
+                    # Raw BGR when it fits the segment (see _shm_raw_ok above);
+                    # the reader distinguishes raw (SHM header channels > 0)
+                    # from JPEG (channels == 0) and handles both shapes.
+                    shm_payload = resized if _shm_raw_ok else last_frame_bytes
+                    frame_buffer.write(shm_ref, shm_payload, feed_id=feed_id)
 
                     try:
                         if not safe_put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1):

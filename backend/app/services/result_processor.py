@@ -194,6 +194,12 @@ class ResultProcessor:
         self.broadcaster = broadcaster
         self._analytics_input_queue = analytics_input_queue
         self._stop_flag = False
+        # Dedicated queue + consumer task for safety/analytics/recording
+        # (C2/C3): the broadcast loop only ENQUEUES, so a slow analytics hook
+        # or recording pump can never stall WebSocket frame delivery.
+        self._safety_queue: Optional[asyncio.Queue] = None
+        self._safety_task: Optional[asyncio.Task] = None
+        self._safety_drops = 0
         # Optional hook for in-process subscribers; assigned via set_subscriber_pump.
         self._subscriber_pump: Optional[Any] = None
         # Throttled feed-status re-broadcast so the frontend's
@@ -322,6 +328,10 @@ class ResultProcessor:
         Calls handle_periodic_tasks_callback when the queue is empty.
         """
         logger.info("Result processor loop started.")
+        self._safety_queue = asyncio.Queue(
+            maxsize=int(self.config.get("feed_manager", {}).get("safety_queue_maxsize", 256)) if self.config else 256
+        )
+        self._safety_task = asyncio.create_task(self._safety_consumer())
         last_heartbeat = time.time()
         _feed_last_processed_ts: Dict[str, float] = {}
         last_shm_stats_log = time.time()
@@ -399,7 +409,23 @@ class ResultProcessor:
                     if result is None:
                         continue
                     _fid, _fidx, _fb, _m, _v, _ex = result
-                    await self._route_safety_and_analytics(_fid, _fidx, _fb, _m, _v, _ex)
+                    # Enqueue, never await: a slow analytics hook / recording
+                    # pump must not stall WebSocket frame delivery (C2/C3).
+                    # The dedicated consumer task preserves FIFO order.
+                    try:
+                        self._safety_queue.put_nowait((_fid, _fidx, _fb, _m, _v, _ex))
+                    except asyncio.QueueFull:
+                        try:
+                            self._safety_queue.get_nowait()  # drop oldest
+                            self._safety_queue.put_nowait((_fid, _fidx, _fb, _m, _v, _ex))
+                            self._safety_drops += 1
+                            if self._safety_drops % 100 == 0:
+                                logger.warning(
+                                    f"[RESULT_PROC] safety/recording queue full; "
+                                    f"dropped {self._safety_drops} oldest frames"
+                                )
+                        except Exception:
+                            pass
 
                 # Dedup logic
                 latest_per_feed: Dict[str, int] = {}
@@ -466,6 +492,46 @@ class ResultProcessor:
             except Exception as e:
                 logger.error(f"Error in result processor loop: {e}", exc_info=True)
                 await asyncio.sleep(1.0)
+
+        # Drain remaining safety/recording frames, then stop the consumer.
+        if self._safety_queue is not None:
+            while True:
+                try:
+                    item = self._safety_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                try:
+                    await self._route_safety_and_analytics(*item)
+                except Exception:
+                    pass
+        if self._safety_task is not None:
+            self._safety_task.cancel()
+            try:
+                await self._safety_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def _safety_consumer(self):
+        """Dedicated consumer for the safety/analytics/recording queue.
+
+        Decouples FR_rp.4 (safety hook, DB metrics, recording pump) from
+        FR_rp.3 (WS broadcast): the broadcast loop only enqueues, so a slow
+        hook can never stall frame delivery. FIFO order per feed preserved.
+        """
+        while not self._stop_flag:
+            q = self._safety_queue
+            if q is None:
+                return
+            try:
+                item = await asyncio.wait_for(q.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+            try:
+                await self._route_safety_and_analytics(*item)
+            except Exception as e:
+                logger.error(f"Error in safety/analytics consumer: {e}", exc_info=True)
 
     async def _route_safety_and_analytics(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra):
         """DB metrics queue + safety/incident hook + recording pump for ONE
